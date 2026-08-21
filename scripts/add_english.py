@@ -38,6 +38,11 @@ def main():
     ap.add_argument("--gh", default=GH)
     ap.add_argument("--out", default="/mnt/volume_d2wey28/projects/ghana-speech-id/data/ipa_text_en.parquet")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--no-crop", action="store_true",
+                    help="skip IPA cropping. Correct when the source came from "
+                         "rephonemise_english.py, which already cropped the AUDIO to the "
+                         "Ghanaian duration distribution -- cropping again would halve the "
+                         "clips and reintroduce a length cue in the other direction")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
@@ -73,12 +78,18 @@ def main():
 
     # Crop to the Ghanaian length distribution so length is not a giveaway.
     gh_lens_arr = np.array(gh_lens)
+    if args.no_crop:
+        print("--no-crop: audio was already cropped before decoding")
     print(f"length before crop: English mean {np.mean([len(ipas[i].split()) for i in keep]):.1f} "
           f"units vs Ghanaian mean {gh_lens_arr.mean():.1f}")
 
     out_ids, out_ipa, out_dur = [], [], []
     for i in keep:
         units = ipas[i].split()
+        if args.no_crop:
+            out_ids.append(ids[i]); out_ipa.append(" ".join(units))
+            out_dur.append(float(durs[i]))
+            continue
         want = int(rng.choice(gh_lens_arr.tolist()))
         if want < len(units):
             start = rng.randint(0, len(units) - want)

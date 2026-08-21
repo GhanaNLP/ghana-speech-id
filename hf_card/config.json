@@ -1,0 +1,33 @@
+{
+  "architecture": "ghana-ipa-asr CTC phonemes (frozen) + linear head over phoneme n-grams",
+  "task": "spoken-language-identification",
+  "phoneme_model_repo": "ghananlpcommunity/ghana-speech-phoneme-asr",
+  "input": "space-separated IPA units from ghana-ipa-asr; units are atomic (k͡p, kʰ, t͡ʃ)",
+  "features": {
+    "type": "tf-idf over phoneme n-grams",
+    "ngram_range": [
+      1,
+      5
+    ],
+    "sublinear_tf": true,
+    "norm": "l2",
+    "punctuation": "dropped"
+  },
+  "onnx": {
+    "file": "onnx/head.onnx",
+    "opset": 13,
+    "notes": "core operators only; no com.microsoft contrib ops, so mobile onnxruntime works",
+    "inputs": {
+      "indices": "int64[K] n-gram ids",
+      "counts": "float32[K] occurrence counts"
+    },
+    "outputs": {
+      "logits": "float32[C]",
+      "probs": "float32[C]"
+    }
+  },
+  "num_labels": null,
+  "labels": null,
+  "recommended_min_units": 40,
+  "notes": "accuracy saturates at ~40 phoneme units (~4 s); gate on unit count, not a timer"
+}
