@@ -58,6 +58,10 @@ def main():
     ap.add_argument("--keep-ids",
                     default="/mnt/volume_d2wey28/projects/ghana-speech-id/data/ipa_text.parquet",
                     help="restrict to the ids this parquet lists; '' decodes everything")
+    ap.add_argument("--audio-col", default="audio")
+    ap.add_argument("--exclude-prefix", default="",
+                    help="skip config directories starting with this; used to leave the "
+                         "bible_* training domain out of the evaluation decode")
     ap.add_argument("--out", required=True)
     ap.add_argument("--provider", default="cuda")
     ap.add_argument("--threads", type=int, default=8)
@@ -83,6 +87,11 @@ def main():
               flush=True)
 
     shards = sorted(glob.glob(f"{args.audio_root}/*/*.parquet"))
+    if args.exclude_prefix:
+        before = len(shards)
+        shards = [f for f in shards
+                  if not f.rsplit("/", 2)[-2].startswith(args.exclude_prefix)]
+        print(f"excluded {before - len(shards)} shards under {args.exclude_prefix}*")
     if args.limit_shards:
         shards = shards[: args.limit_shards]
     print(f"{len(shards)} shards under {args.audio_root}\n", flush=True)
@@ -92,7 +101,14 @@ def main():
 
     for si, shard in enumerate(shards, 1):
         cfg = shard.rsplit("/", 2)[-2]
-        t = pq.read_table(shard, columns=["id", "audio"]).to_pydict()
+        have = set(pq.ParquetFile(shard).schema_arrow.names)
+        cols = [args.audio_col] + (["id"] if "id" in have else [])
+        t = pq.read_table(shard, columns=cols).to_pydict()
+        if "id" not in t:
+            # ghana-speech-eval carries no id column; synthesise a stable key from the
+            # config and row index so downstream joins still have one
+            stem = shard.rsplit("/", 1)[-1].replace(".parquet", "")
+            t["id"] = [f"{cfg}_{stem}_{i:06d}" for i in range(len(t[args.audio_col]))]
         sel = [i for i, _id in enumerate(t["id"]) if keep is None or _id in keep]
         if not sel:
             continue
@@ -102,7 +118,7 @@ def main():
             streams, ids, durs = [], [], []
             for i in chunk:
                 try:
-                    w = decode_cell(t["audio"][i])
+                    w = decode_cell(t[args.audio_col][i])
                 except Exception:
                     continue
                 if len(w) < int(0.3 * SR):
