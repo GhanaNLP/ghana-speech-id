@@ -33,14 +33,35 @@ ISO_TO_LABEL = {
 # Present in the eval set, absent from the label set. Used for the rejection curve.
 OUT_OF_SET = {"gaa": "Ga", "aha": "Ahanta", "kpo": "Ikposo"}
 
+# decode_base.py records the config directory rather than an iso code, so map it back.
+# Spelled out rather than parsed off the suffix: finance_ga and unicef_dagbani do not
+# carry one, and a silent mismap would quietly score the wrong language as correct.
+CONFIG_TO_ISO = {
+    "finance_Akuapem_Twi": "twi", "finance_Asante_Twi": "twi", "finance_fante": "fat",
+    "finance_ga": "gaa",
+    "jw_ahanta_aha": "aha", "jw_dagaare_dga": "dga", "jw_dangme_ada": "ada",
+    "jw_ewe_ewe": "ewe", "jw_fante_fat": "fat", "jw_frafra_gur": "gur",
+    "jw_ga_gaa": "gaa", "jw_nzema_nzi": "nzi", "jw_sehwi_sfw": "sfw",
+    "lds_Asante_Twi": "twi", "lds_Fante_fat": "fat",
+    "unicef_Asante_Twi": "twi", "unicef_dagbani": "dag", "unicef_ewe": "ewe",
+    "waxal_Asante_Twi": "twi", "waxal_Dagaare_dga": "dga", "waxal_Dagbani_dag": "dag",
+    "waxal_Ewe_ewe": "ewe", "waxal_Ikposo_kpo": "kpo",
+}
+
 PUNCT = set(".,!?;:\"'()-—…")
 
 
 def strip_punct(s: str) -> str:
+    """Drop punctuation units.
+
+    IPA transcripts carry punctuation as standalone whitespace-separated units, so removing
+    them is a token filter. Orthography attaches them to words, where this is a no-op --
+    which is correct, since the char analyzer is trained on text that still has them.
+    """
     return " ".join(u for u in s.split() if u not in PUNCT)
 
 
-def load_decoded(path: Path):
+def load_decoded(path: Path, text_col: str = "ipa"):
     """Read decode_gpu.py's output and group it by eval config.
 
     Decoding lives in decode_gpu.py so it runs on the GPU: 53 hours of audio at ~900x
@@ -48,10 +69,18 @@ def load_decoded(path: Path):
     """
     import pyarrow.parquet as pq
 
-    t = pq.read_table(path, columns=["id", "group", "ipa", "iso"]).to_pydict()
+    have = set(pq.ParquetFile(path).schema_arrow.names)
+    # decode_gpu.py writes group/ipa/iso; decode_base.py writes language/text and no iso
+    cfg_col = "group" if "group" in have else "language"
+    txt_col = text_col if text_col in have else ("ipa" if "ipa" in have else "text")
+    cols = ["id", cfg_col, txt_col] + (["iso"] if "iso" in have else [])
+    t = pq.read_table(path, columns=cols).to_pydict()
     by_cfg = defaultdict(list)
-    for _id, cfg, ipa, iso in zip(t["id"], t["group"], t["ipa"], t["iso"]):
-        by_cfg[cfg].append({"ipa": ipa or "", "iso": iso or ""})
+    for i, (_id, cfg) in enumerate(zip(t["id"], t[cfg_col])):
+        iso = t["iso"][i] if "iso" in t else CONFIG_TO_ISO.get(cfg, "")
+        by_cfg[cfg].append({"ipa": t[txt_col][i] or "", "iso": iso})
+    print(f"columns: config={cfg_col} text={txt_col} "
+          f"iso={'present' if 'iso' in t else 'derived from config'}")
     print(f"loaded {len(t['id'])} decoded clips across {len(by_cfg)} configs from {path}")
     return by_cfg
 
@@ -61,6 +90,8 @@ def main():
     ap.add_argument("--model", required=True, help="model.joblib from train_head.py")
     ap.add_argument("--decoded", default="data/eval_ipa_gh.parquet",
                     help="output of decode_gpu.py --hf-eval")
+    ap.add_argument("--text-col", default="ipa",
+                    help="transcript column; base decodes use 'text'")
     ap.add_argument("--keep-punct", action="store_true",
                     help="must match the head; the sweep trains with --drop-punct")
     ap.add_argument("--out", default="out/ood_eval.json")
@@ -73,7 +104,7 @@ def main():
     labels = list(bundle["labels"])
     has_english = "English_eng" in labels
 
-    cache = load_decoded(Path(args.decoded))
+    cache = load_decoded(Path(args.decoded), args.text_col)
     cfgs = sorted(cache)
     print(f"{len(cfgs)} non-bible configs (bible_* skipped: that is the training domain)\n")
 

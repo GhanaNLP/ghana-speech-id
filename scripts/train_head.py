@@ -81,7 +81,7 @@ def truncate(s: str, k: int) -> str:
 
 
 def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac: float,
-         merge_iso: bool = False):
+         merge_iso: bool = False, text_col: str = "ipa"):
     """Build train/validation.
 
     split_mode:
@@ -95,7 +95,7 @@ def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac
       random      -- random per-language holdout. Reported only for the gap against
                      contiguous, which measures how much passage-local memorisation helps.
     """
-    t = pq.read_table(path, columns=["id", "language", "ipa", "duration", "split"]).to_pydict()
+    t = pq.read_table(path, columns=["id", "language", text_col, "duration", "split"]).to_pydict()
     mm = merge_map(t["language"]) if merge_iso else {}
     groups = defaultdict(list)
     for k, v in mm.items():
@@ -105,7 +105,7 @@ def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac
         print("merging " + " + ".join(sorted(ks)) + " -> " + v)
     rows = []
     dropped = 0
-    for _id, lang, ipa, dur, split in zip(t["id"], t["language"], t["ipa"], t["duration"], t["split"]):
+    for _id, lang, ipa, dur, split in zip(t["id"], t["language"], t[text_col], t["duration"], t["split"]):
         if ipa is None:
             dropped += 1; continue
         s = strip_punct(ipa) if drop_punct else ipa
@@ -138,7 +138,26 @@ def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac
     return out
 
 
-def build_model(kind: str, ngram_max: int, max_features: int, min_df: int):
+def build_model(kind: str, ngram_max: int, max_features: int, min_df: int,
+                analyzer: str = "word"):
+    """analyzer picks how a transcript is cut into features, and it must follow the
+    front-end that produced it.
+
+      word  ghana-ipa-asr emits space-separated IPA units, several of them multi-character
+            (kʰ, k͡p, t͡ʃ). Whitespace tokens ARE the phonemes, and splitting on characters
+            would turn one sound into two.
+
+      char  base omniASR emits ordinary orthography, so whitespace tokens are words.
+            Word n-grams are far sparser and weaker on short utterances; character n-grams
+            capture the spelling conventions and morphology that separate these languages.
+    """
+    if analyzer == "char":
+        vec = TfidfVectorizer(
+            analyzer="char_wb", lowercase=True, ngram_range=(1, ngram_max),
+            max_features=max_features, min_df=min_df, sublinear_tf=True,
+            use_idf=(kind != "nb"), norm="l2" if kind != "nb" else None)
+        clf = _classifier(kind)
+        return vec, clf
     vec = TfidfVectorizer(
         analyzer="word",
         token_pattern=r"\S+",       # units are whitespace separated; never split kʰ or k͡p
@@ -150,6 +169,10 @@ def build_model(kind: str, ngram_max: int, max_features: int, min_df: int):
         use_idf=(kind != "nb"),     # NB wants counts, not idf-weighted reals
         norm="l2" if kind != "nb" else None,
     )
+    return vec, _classifier(kind)
+
+
+def _classifier(kind: str):
     if kind == "logreg":
         clf = LogisticRegression(max_iter=1000, C=10.0, solver="lbfgs", n_jobs=-1)
     elif kind == "sgd":
@@ -162,7 +185,7 @@ def build_model(kind: str, ngram_max: int, max_features: int, min_df: int):
         clf = MultinomialNB(alpha=0.1)
     else:
         raise SystemExit(f"unknown model {kind}")
-    return vec, clf
+    return clf
 
 
 def main():
@@ -177,6 +200,11 @@ def main():
                     help="punctuation units are only ~62%% accurate upstream and carry little "
                          "language signal; dropping them is usually the right default")
     ap.add_argument("--min-units", type=int, default=3)
+    ap.add_argument("--analyzer", default="word", choices=["word", "char"],
+                    help="word for IPA units from ghana-ipa-asr; char for "
+                         "orthography from base omniASR")
+    ap.add_argument("--text-col", default="ipa",
+                    help="column holding the transcript; base decodes use 'text'")
     ap.add_argument("--split-mode", default="contiguous",
                     choices=["contiguous", "random", "shipped"],
                     help="contiguous holds out the last test-frac of each language by id, "
@@ -197,7 +225,7 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     data = load(args.data, args.drop_punct, args.min_units, args.split_mode, args.test_frac,
-                args.merge_iso)
+                args.merge_iso, args.text_col)
     tr = data["train"]
     if args.limit and args.limit < len(tr):
         import random
@@ -207,7 +235,8 @@ def main():
     Xtr_raw = [r[0] for r in tr]; ytr = [r[1] for r in tr]
     Xva_raw = [r[0] for r in data["validation"]]; yva = [r[1] for r in data["validation"]]
 
-    vec, clf = build_model(args.model, args.ngram_max, args.max_features, args.min_df)
+    vec, clf = build_model(args.model, args.ngram_max, args.max_features,
+                           args.min_df, args.analyzer)
 
     t0 = time.time()
     Xtr = vec.fit_transform(Xtr_raw)
