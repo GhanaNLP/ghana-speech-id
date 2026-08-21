@@ -102,7 +102,16 @@ def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac
       random      -- random per-language holdout. Reported only for the gap against
                      contiguous, which measures how much passage-local memorisation helps.
     """
-    t = pq.read_table(path, columns=["id", "language", text_col, "duration", "split"]).to_pydict()
+    have = set(pq.ParquetFile(path).schema_arrow.names)
+    cols = ["id", "language", text_col, "duration"]
+    if "split" in have:
+        cols.append("split")
+    t = pq.read_table(path, columns=cols).to_pydict()
+    if "split" not in t:
+        # decode_base.py does not carry one; contiguous and random modes derive their own
+        if split_mode == "shipped":
+            raise SystemExit(f"{path} has no split column; use --split-mode contiguous")
+        t["split"] = ["train"] * len(t["id"])
     mm = merge_map(t["language"]) if merge_iso else {}
     groups = defaultdict(list)
     for k, v in mm.items():
