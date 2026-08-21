@@ -75,9 +75,16 @@ def strip_punct(s: str) -> str:
     return " ".join(u for u in s.split() if u not in PUNCT)
 
 
-def truncate(s: str, k: int) -> str:
-    """First k units -- simulates a shorter clip without needing the audio."""
-    return " ".join(s.split()[:k]) if k > 0 else s
+def truncate(s: str, k: int, analyzer: str = "word") -> str:
+    """First k units -- simulates a shorter clip without needing the audio.
+
+    The unit has to match the analyzer or the curves are not comparable: whitespace tokens
+    are phonemes for IPA but words for orthography, and 5 phonemes is about half a second
+    where 5 words is two or three. For orthography, truncate by character instead.
+    """
+    if k <= 0:
+        return s
+    return s[:k] if analyzer == "char" else " ".join(s.split()[:k])
 
 
 def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac: float,
@@ -263,12 +270,16 @@ def main():
     # accuracy by utterance length -- the number that decides how much audio you need
     print("\n== accuracy vs first-K units (truncated validation) ==")
     length_curve = {}
-    for k in [5, 10, 20, 40, 80, 0]:
-        Xk = vec.transform([truncate(s, k) for s in Xva_raw])
+    # characters for orthography, phoneme units for IPA -- roughly comparable durations
+    ks = [10, 20, 40, 80, 160, 0] if args.analyzer == "char" else [5, 10, 20, 40, 80, 0]
+    for k in ks:
+        Xk = vec.transform([truncate(s, k, args.analyzer) for s in Xva_raw])
         pk = clf.predict(Xk)
         a = accuracy_score(yva, pk); m = f1_score(yva, pk, average="macro")
         length_curve[k or "full"] = {"acc": a, "macro_f1": m}
-        print(f"  first {str(k) if k else 'all':>4} units:  acc {a:.4f}  macroF1 {m:.4f}", flush=True)
+        unit = "chars" if args.analyzer == "char" else "units"
+        print(f"  first {str(k) if k else 'all':>4} {unit}:  acc {a:.4f}  macroF1 {m:.4f}",
+              flush=True)
 
     # where the errors live, by family
     fam_true = [LANG2FAM.get(l, "?") for l in yva]
