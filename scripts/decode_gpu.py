@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import glob
 import io
+from collections import defaultdict
 import random
 import time
 
@@ -90,20 +91,39 @@ def main():
     t0 = time.time()
 
     if args.hf_eval:
-        from datasets import Audio, load_dataset
-        from huggingface_hub import HfApi
-        cfgs = sorted(c for c in HfApi().dataset_info(
-            "ghananlpcommunity/ghana-speech-eval").config_names if not c.startswith("bible_"))
-        print(f"{len(cfgs)} non-bible configs", flush=True)
-        for cfg in cfgs:
-            ds = load_dataset("ghananlpcommunity/ghana-speech-eval", cfg, split="eval")
-            if args.n:
-                ds = ds.select(range(min(args.n, len(ds))))
-            ds = ds.cast_column("audio", Audio(sampling_rate=SR))
-            for i, r in enumerate(ds):
-                items.append((f"{cfg}_{i:06d}",
-                              np.asarray(r["audio"]["array"], dtype=np.float32), cfg))
-            print(f"  {cfg:26} {len(ds):5d} clips loaded", flush=True)
+        # datasets 5.x needs torchcodec to decode an Audio column, which pins against torch
+        # and fights fairseq2's exact pin. The parquet holds ordinary encoded audio bytes,
+        # so read them straight through pyarrow and soundfile instead -- the same path the
+        # local English shards take.
+        from huggingface_hub import snapshot_download
+        root = snapshot_download("ghananlpcommunity/ghana-speech-eval", repo_type="dataset",
+                                 allow_patterns=["*.parquet"])
+        files = sorted(f for f in glob.glob(f"{root}/*/*.parquet")
+                       if not f.rsplit("/", 2)[-2].startswith("bible_"))
+        print(f"{len(files)} non-bible parquet files (bible_* is the training domain)",
+              flush=True)
+        # ids must be unique across a config's shards: several configs are split over two
+        # files, and restarting the counter per file collided them
+        seen_per_cfg = defaultdict(int)
+        for f in files:
+            cfg = f.rsplit("/", 2)[-2]
+            t = pq.read_table(f).to_pydict()
+            cols = set(t)
+            n_before = len(items)
+            for i in range(len(t[args.audio_col])):
+                try:
+                    w, sr = decode_cell(t[args.audio_col][i])
+                except Exception:
+                    continue
+                w = resample_to_16k(w, sr)
+                if len(w) < int(0.4 * SR):
+                    continue
+                iso = t["iso"][i] if "iso" in cols else ""
+                items.append((f"{cfg}_{seen_per_cfg[cfg]:06d}", w, f"{cfg}\t{iso}"))
+                seen_per_cfg[cfg] += 1
+            if args.n and len(items) - n_before > args.n:
+                del items[n_before + args.n:]
+            print(f"  {cfg:26} {len(items)-n_before:5d} clips", flush=True)
     else:
         files = sorted(glob.glob(args.shards))
         files = [f for f in files if "/validation-" not in f]
@@ -157,7 +177,9 @@ def main():
     units = [len(s.split()) for s in out if s]
     pq.write_table(pa.table({
         "id": pa.array([i for i, _, _ in items], pa.string()),
-        "group": pa.array([g for _, _, g in items], pa.string()),
+        "group": pa.array([g.split("\t")[0] for _, _, g in items], pa.string()),
+        "iso": pa.array([(g.split("\t")[1] if "\t" in g else "") for _, _, g in items],
+                        pa.string()),
         "ipa": pa.array(out, pa.string()),
         "duration": pa.array([len(w) / SR for _, w, _ in items], pa.float64()),
     }), args.out, compression="zstd")

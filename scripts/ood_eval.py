@@ -40,81 +40,42 @@ def strip_punct(s: str) -> str:
     return " ".join(u for u in s.split() if u not in PUNCT)
 
 
-def phonemise_all(configs, per_config, cache_path, keep_punct):
-    """Decode each config to IPA once and cache it; decoding dominates the runtime."""
-    import pyarrow as pa
+def load_decoded(path: Path):
+    """Read decode_gpu.py's output and group it by eval config.
+
+    Decoding lives in decode_gpu.py so it runs on the GPU: 53 hours of audio at ~900x
+    realtime is three minutes there against roughly six hours across eight CPU workers.
+    """
     import pyarrow.parquet as pq
 
-    cache = {}
-    if cache_path.exists():
-        t = pq.read_table(cache_path).to_pydict()
-        for cfg, ipa, iso, lang in zip(t["subset"], t["ipa"], t["iso"], t["language"]):
-            cache.setdefault(cfg, []).append({"ipa": ipa, "iso": iso, "language": lang})
-        print(f"loaded {sum(len(v) for v in cache.values())} cached transcriptions "
-              f"for {len(cache)} configs")
-
-    todo = [c for c in configs if c not in cache]
-    if todo:
-        from datasets import Audio, load_dataset
-        from ghana_ipa_asr import GhanaIPAASR
-        asr = GhanaIPAASR.load()
-        for cfg in todo:
-            t0 = time.time()
-            try:
-                ds = load_dataset("ghananlpcommunity/ghana-speech-eval", cfg, split="eval")
-            except Exception as e:
-                print(f"  {cfg}: load failed ({type(e).__name__}: {str(e)[:90]})", flush=True)
-                continue
-            n = min(per_config, len(ds)) if per_config else len(ds)
-            ds = ds.select(range(n)).cast_column("audio", Audio(sampling_rate=16000))
-            rows, wavs, meta = [], [], []
-            for r in ds:
-                wavs.append(np.asarray(r["audio"]["array"], dtype=np.float32))
-                meta.append((r.get("iso", ""), r.get("language", "")))
-            secs = sum(len(w) for w in wavs) / 16000
-            B = 16
-            for i in range(0, len(wavs), B):
-                for j, tr in enumerate(asr.transcribe_batch(wavs[i:i + B], sample_rate=16000)):
-                    iso, lang = meta[i + j]
-                    rows.append({"ipa": tr.spaced(punctuation=keep_punct),
-                                 "iso": iso, "language": lang})
-            cache[cfg] = rows
-            dt = time.time() - t0
-            print(f"  {cfg:26} {len(rows):5d} clips {secs/60:6.1f} min audio "
-                  f"{dt:6.0f}s ({secs/max(dt,1e-9):5.1f}x RT)", flush=True)
-
-            flat = [(c, r["ipa"], r["iso"], r["language"])
-                    for c, rs in cache.items() for r in rs]
-            pq.write_table(pa.table({
-                "subset": [x[0] for x in flat], "ipa": [x[1] for x in flat],
-                "iso": [x[2] for x in flat], "language": [x[3] for x in flat],
-            }), cache_path, compression="zstd")
-    return cache
+    t = pq.read_table(path, columns=["id", "group", "ipa", "iso"]).to_pydict()
+    by_cfg = defaultdict(list)
+    for _id, cfg, ipa, iso in zip(t["id"], t["group"], t["ipa"], t["iso"]):
+        by_cfg[cfg].append({"ipa": ipa or "", "iso": iso or ""})
+    print(f"loaded {len(t['id'])} decoded clips across {len(by_cfg)} configs from {path}")
+    return by_cfg
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="model.joblib from train_head.py")
-    ap.add_argument("--per-config", type=int, default=0, help="0 uses every clip")
+    ap.add_argument("--decoded", default="data/eval_ipa_gh.parquet",
+                    help="output of decode_gpu.py --hf-eval")
     ap.add_argument("--keep-punct", action="store_true",
                     help="must match the head; the sweep trains with --drop-punct")
-    ap.add_argument("--cache", default="data/eval_ipa.parquet")
     ap.add_argument("--out", default="out/ood_eval.json")
     args = ap.parse_args()
 
     import joblib
-    from huggingface_hub import HfApi
 
     bundle = joblib.load(args.model)
     vec, clf = bundle["vec"], bundle["clf"]
     labels = list(bundle["labels"])
     has_english = "English_eng" in labels
 
-    cfgs = sorted(c for c in HfApi().dataset_info(
-        "ghananlpcommunity/ghana-speech-eval").config_names if not c.startswith("bible_"))
+    cache = load_decoded(Path(args.decoded))
+    cfgs = sorted(cache)
     print(f"{len(cfgs)} non-bible configs (bible_* skipped: that is the training domain)\n")
-
-    cache = phonemise_all(cfgs, args.per_config, Path(args.cache), args.keep_punct)
 
     def score(strings):
         strings = [s if args.keep_punct else strip_punct(s) for s in strings]
