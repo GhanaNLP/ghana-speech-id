@@ -155,7 +155,7 @@ def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac
 
 
 def build_model(kind: str, ngram_max: int, max_features: int, min_df: int,
-                analyzer: str = "word"):
+                analyzer: str = "word", lowercase: bool = True):
     """analyzer picks how a transcript is cut into features, and it must follow the
     front-end that produced it.
 
@@ -169,7 +169,7 @@ def build_model(kind: str, ngram_max: int, max_features: int, min_df: int,
     """
     if analyzer == "char":
         vec = TfidfVectorizer(
-            analyzer="char_wb", lowercase=True, ngram_range=(1, ngram_max),
+            analyzer="char_wb", lowercase=lowercase, ngram_range=(1, ngram_max),
             max_features=max_features, min_df=min_df, sublinear_tf=True,
             use_idf=(kind != "nb"), norm="l2" if kind != "nb" else None)
         clf = _classifier(kind)
@@ -219,6 +219,12 @@ def main():
     ap.add_argument("--analyzer", default="word", choices=["word", "char"],
                     help="word for IPA units from ghana-ipa-asr; char for "
                          "orthography from base omniASR")
+    ap.add_argument("--no-lowercase", action="store_true",
+                    help="char analyzer only. lowercase=True folds Ghanaian capitals "
+                         "(Ɛ->ɛ, Ɔ->ɔ, Ŋ->ŋ, Ʋ->ʋ), which is Unicode case folding that "
+                         "std::tolower cannot do -- so the C++ port would need a folding "
+                         "table. Training without it removes that dependency, and case may "
+                         "carry signal. Worth measuring before inheriting the complexity.")
     ap.add_argument("--text-col", default="ipa",
                     help="column holding the transcript; base decodes use 'text'")
     ap.add_argument("--split-mode", default="contiguous",
@@ -252,7 +258,7 @@ def main():
     Xva_raw = [r[0] for r in data["validation"]]; yva = [r[1] for r in data["validation"]]
 
     vec, clf = build_model(args.model, args.ngram_max, args.max_features,
-                           args.min_df, args.analyzer)
+                           args.min_df, args.analyzer, not args.no_lowercase)
 
     t0 = time.time()
     Xtr = vec.fit_transform(Xtr_raw)
