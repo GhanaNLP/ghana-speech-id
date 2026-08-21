@@ -1,0 +1,60 @@
+# Publish to PyPI with trusted publishing (OIDC) -- no API token stored anywhere.
+#
+# Before the first release, add a PENDING publisher on PyPI:
+#   PyPI -> Your projects -> Publishing -> Add a pending publisher
+#     project:  ghana-speech-id
+#     owner:    GhanaNLP
+#     repo:     ghana-speech-id
+#     workflow: release.yml
+#     environment: pypi
+# It converts to a normal trusted publisher after the first successful upload.
+#
+# The wheel is pure Python (py3-none-any), so this is one short job rather than a
+# cibuildwheel matrix. Actions minutes are free and unlimited on public repositories.
+
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:      # lets you rehearse the build without publishing
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Check metadata
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine check dist/*
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    # only on a published release, never on workflow_dispatch
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # required for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

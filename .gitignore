@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+third_party/
+data/
+out/
+logs/
+model/
+*.onnx
+*.joblib
+*.parquet

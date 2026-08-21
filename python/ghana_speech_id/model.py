@@ -1,0 +1,211 @@
+"""Language identification over IPA phoneme strings.
+
+Pure Python on purpose. The head is a vocabulary lookup and one sparse gather, so there is
+nothing worth compiling, and a universal wheel installs everywhere without a build matrix.
+The C++ library in this repository exists for mobile, where linking beats interpreting.
+
+Feature extraction must match the trainer exactly or the app silently loses accuracy, so
+this mirrors sklearn's TfidfVectorizer(analyzer="word", token_pattern=r"\\S+",
+lowercase=False, sublinear_tf=True, norm="l2") -- and the tf-idf arithmetic itself lives
+inside the ONNX graph, so what happens here is only tokenisation, n-grams and counting.
+"""
+from __future__ import annotations
+
+import os
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Sequence
+
+import numpy as np
+
+DEFAULT_REPO = "ghananlpcommunity/ghana-speech-id"
+
+
+@dataclass(frozen=True)
+class Prediction:
+    """One classification result."""
+
+    language: str
+    """Predicted label, e.g. ``"Twi_twi"``."""
+    confidence: float
+    """Model score. Calibrated only for a logistic-regression head; for an SVM head prefer
+    :attr:`margin`."""
+    margin: float
+    """Top-1 minus top-2. A usable confidence signal regardless of head type."""
+    matched_ngrams: int
+    """How many n-grams were found in the vocabulary."""
+
+    def __str__(self) -> str:  # pragma: no cover - convenience only
+        return f"{self.language} ({self.confidence:.3f})"
+
+
+class GhanaSpeechId:
+    """Classify IPA phoneme strings into Ghanaian and West African languages.
+
+    The phonemes come from ``ghana-ipa-asr``; this takes it from there::
+
+        from ghana_ipa_asr import GhanaIPAASR
+        from ghana_speech_id import GhanaSpeechId
+
+        asr = GhanaIPAASR.load()
+        lid = GhanaSpeechId.load()
+
+        ipa = asr.transcribe("clip.wav").spaced(punctuation=False)
+        print(lid.classify(ipa))
+
+    Pass the recogniser's output unmodified. Units are space separated and several are
+    multi-character (``k͡p``, ``kʰ``, ``t͡ʃ``, ``nʷ``); splitting on characters turns one
+    sound into two and costs real accuracy.
+    """
+
+    def __init__(
+        self,
+        onnx_path: str | os.PathLike,
+        ngrams_path: str | os.PathLike,
+        labels_path: str | os.PathLike,
+        config_path: str | os.PathLike | None = None,
+        num_threads: int = 1,
+    ) -> None:
+        import onnxruntime as ort
+
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = num_threads
+        opts.inter_op_num_threads = 1
+        self._sess = ort.InferenceSession(
+            str(onnx_path), opts, providers=["CPUExecutionProvider"]
+        )
+        self._in = [i.name for i in self._sess.get_inputs()]
+        self._out = [o.name for o in self._sess.get_outputs()]
+
+        text = Path(ngrams_path).read_text(encoding="utf-8").split("\n")
+        if text and text[-1] == "":
+            text.pop()
+        self._vocab = {g: i for i, g in enumerate(text)}
+
+        self.languages: list[str] = [
+            l for l in Path(labels_path).read_text(encoding="utf-8").split("\n") if l
+        ]
+
+        self.ngram_min, self.ngram_max = 1, 5
+        if config_path and Path(config_path).exists():
+            for line in Path(config_path).read_text(encoding="utf-8").splitlines():
+                key, _, val = line.partition(" ")
+                if key == "ngram_min":
+                    self.ngram_min = int(val)
+                elif key == "ngram_max":
+                    self.ngram_max = int(val)
+
+    # ------------------------------------------------------------------ loading
+
+    @classmethod
+    def load(
+        cls,
+        model: str | os.PathLike = DEFAULT_REPO,
+        *,
+        fp16: bool = False,
+        num_threads: int = 1,
+    ) -> "GhanaSpeechId":
+        """Load from a local directory or pull one from the Hugging Face Hub.
+
+        :param model: a directory holding ``head.onnx``/``head.fp16.onnx``, ``ngrams.txt``,
+            ``labels.txt`` and ``head_config.txt``, or a Hub repo id.
+        :param fp16: prefer the half-precision head, which is half the size on disk.
+        """
+        path = Path(model)
+        if not path.is_dir():
+            from huggingface_hub import snapshot_download
+
+            path = Path(
+                snapshot_download(
+                    str(model),
+                    allow_patterns=["*.onnx", "ngrams.txt", "labels.txt", "head_config.txt"],
+                )
+            )
+
+        # the exported artefacts may sit at the root or under onnx/
+        root = path if (path / "ngrams.txt").exists() else path / "onnx"
+        names = ["head.fp16.onnx", "head.onnx"] if fp16 else ["head.onnx", "head.fp16.onnx"]
+        onnx = next((root / n for n in names if (root / n).exists()), None)
+        if onnx is None:
+            raise FileNotFoundError(f"no head.onnx or head.fp16.onnx under {root}")
+        for required in ("ngrams.txt", "labels.txt"):
+            if not (root / required).exists():
+                raise FileNotFoundError(f"missing {required} under {root}")
+
+        cfg = root / "head_config.txt"
+        return cls(onnx, root / "ngrams.txt", root / "labels.txt",
+                   cfg if cfg.exists() else None, num_threads)
+
+    # ------------------------------------------------------------------ features
+
+    def _featurise(self, ipa: str) -> tuple[np.ndarray, np.ndarray]:
+        units = ipa.split()
+        if not units:
+            return np.empty(0, np.int64), np.empty(0, np.float32)
+
+        vocab = self._vocab
+        hits: Counter[int] = Counter()
+        n_max, n_min = self.ngram_max, self.ngram_min
+        for i in range(len(units)):
+            gram = ""
+            for n in range(1, n_max + 1):
+                j = i + n - 1
+                if j >= len(units):
+                    break
+                gram = units[j] if n == 1 else gram + " " + units[j]
+                if n < n_min:
+                    continue
+                idx = vocab.get(gram)
+                if idx is not None:
+                    hits[idx] += 1
+        if not hits:
+            return np.empty(0, np.int64), np.empty(0, np.float32)
+
+        keys = np.fromiter(hits.keys(), np.int64, len(hits))
+        vals = np.fromiter(hits.values(), np.float32, len(hits))
+        return keys, vals
+
+    # ------------------------------------------------------------------ inference
+
+    def posterior(self, ipa: str) -> dict[str, float] | None:
+        """Full distribution over languages, or ``None`` when no n-gram matched."""
+        idx, cnt = self._featurise(ipa)
+        if idx.size == 0:
+            return None
+        probs = self._sess.run([self._out[1]], {self._in[0]: idx, self._in[1]: cnt})[0]
+        return dict(zip(self.languages, (float(p) for p in probs)))
+
+    def classify(self, ipa: str) -> Prediction | None:
+        """Best guess, or ``None`` when there is no basis for one.
+
+        ``None`` means every n-gram was out of vocabulary -- report it as unknown rather
+        than naming whichever language scored least badly. Note that this is *not* a
+        general "not confident" signal: the head is closed-set and will name an in-set
+        language for speech in a language it was never trained on. Threshold on
+        :attr:`Prediction.margin` if you need to reject those.
+        """
+        idx, cnt = self._featurise(ipa)
+        if idx.size == 0:
+            return None
+        probs = self._sess.run([self._out[1]], {self._in[0]: idx, self._in[1]: cnt})[0]
+        order = np.argsort(probs)[::-1]
+        best = int(order[0])
+        second = float(probs[order[1]]) if probs.size > 1 else 0.0
+        return Prediction(
+            language=self.languages[best],
+            confidence=float(probs[best]),
+            margin=float(probs[best]) - second,
+            matched_ngrams=int(cnt.sum()),
+        )
+
+    def classify_batch(self, ipas: Sequence[str]) -> list[Prediction | None]:
+        """Convenience loop. The head costs microseconds, so there is no batching win."""
+        return [self.classify(s) for s in ipas]
+
+    def __len__(self) -> int:
+        return len(self.languages)
+
+    def __repr__(self) -> str:  # pragma: no cover - convenience only
+        return (f"GhanaSpeechId({len(self.languages)} languages, "
+                f"{len(self._vocab)} n-grams, {self.ngram_min}-{self.ngram_max} grams)")

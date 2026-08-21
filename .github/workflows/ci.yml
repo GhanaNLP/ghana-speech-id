@@ -1,0 +1,31 @@
+# Fast checks on push and PR. Deliberately light: the package has no compiled parts, and
+# the model artefacts are not in the repo, so this covers import, lint and packaging only.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip build ruff
+      - name: Lint
+        run: ruff check python/ scripts/
+      - name: Build and install
+        run: |
+          python -m build
+          python -m pip install dist/*.whl
+      - name: Import and CLI smoke
+        run: |
+          python -c "import ghana_speech_id; print(ghana_speech_id.__version__)"
+          ghana-speech-id --help
