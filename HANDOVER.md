@@ -67,15 +67,21 @@ points out of domain, so it is cheap rather than harmful. It can return from any
 Ghanaian English source; `africa-accents` on the H200 looked plausible. Adding it is about
 twenty minutes now the pipeline exists: decode, `build_base_corpus.py --en`, retrain.
 
-**The 1B model.** Built and published. It ties the 300M out of domain, trails slightly
-in-domain, and wins by about two points below three seconds of speech. sherpa-onnx ships it
-int8-only, and int8 has no CUDA kernels, so bulk decoding needs fairseq2 (283x) rather than
-sherpa (4-5x); on-device single-clip inference through sherpa int8 is fine.
+Those two are the only ones that need a decision. The rest below is work with an obvious
+answer, or things simply worth knowing.
 
-**Rejection is still weak.** At 80% of in-set answers retained it rejects 51.7% of
-out-of-set speech. Better than the IPA head's 26.6%, not good enough to rely on. Out-of-set
-predictions are at least coherent now: Ga goes to Dangme, Ahanta to Nzema -- each language's
-nearest relative in the label set.
+## Known, no decision needed
+
+**Rejection is weak.** At 80% of in-set answers retained it rejects about half of
+out-of-set speech. Better than the IPA head's 26.6%, not good enough to rely on. Fixing it
+properly means an explicit "other" class or a background model. Out-of-set predictions are
+at least coherent: Ga goes to Dangme, Ahanta to Nzema -- each language's nearest relative.
+
+**The 1B is resolved, not open.** Built, published, characterised: it ties the 300M out of
+domain, trails slightly in-domain, and wins by about two points below three seconds of
+speech. sherpa-onnx ships it int8-only and int8 has no CUDA kernels, so bulk decoding needs
+fairseq2 (283x) rather than sherpa (4-5x). On-device single-clip inference through sherpa
+int8 is fine.
 
 ## Not done
 
