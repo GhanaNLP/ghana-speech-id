@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghana Speech ID</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --line: #262b36; --text: #e8eaed;
+    --dim: #9aa3b2; --accent: #4ade80; --warn: #fbbf24; --bad: #f87171;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f7f9; --card:#fff; --line:#e3e6ec; --text:#1a1d23;
+            --dim:#5f6673; --accent:#16a34a; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .wrap { width: 100%; max-width: 560px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); font-size: 0.9rem; margin: 0 0 22px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px;
+  }
+  #rec {
+    width: 100%; padding: 18px; font-size: 1.05rem; font-weight: 600; cursor: pointer;
+    border: 0; border-radius: 10px; background: var(--accent); color: #06210f;
+    transition: background .15s, opacity .15s;
+  }
+  #rec[data-state="recording"] { background: var(--bad); color: #2b0b0b; }
+  #rec:disabled { opacity: .55; cursor: default; }
+
+  /* level meter doubles as the "is my mic working" signal and the too-quiet warning */
+  .meter { height: 8px; background: var(--line); border-radius: 99px; margin: 16px 0 6px;
+           overflow: hidden; }
+  .meter > i { display: block; height: 100%; width: 0%; background: var(--accent);
+               transition: width .06s linear; }
+  .meter.low > i { background: var(--warn); }
+
+  .timer { display: flex; justify-content: space-between; font-size: .82rem;
+           color: var(--dim); font-variant-numeric: tabular-nums; }
+  .hint { margin-top: 14px; font-size: .86rem; color: var(--dim); min-height: 1.4em; }
+  .hint.warn { color: var(--warn); }
+  .hint.bad { color: var(--bad); }
+
+  #out { margin-top: 18px; display: none; }
+  .lang { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.02em; }
+  .conf { color: var(--dim); font-size: .9rem; margin-top: 2px; }
+  .bars { margin-top: 14px; display: grid; gap: 7px; }
+  .bar { display: grid; grid-template-columns: 128px 1fr 46px; gap: 10px;
+         align-items: center; font-size: .84rem; }
+  .bar .t { background: var(--line); height: 7px; border-radius: 99px; overflow: hidden; }
+  .bar .t > i { display: block; height: 100%; background: var(--accent); }
+  .bar .n { color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+  .tx { margin-top: 16px; padding: 12px; background: var(--bg); border-radius: 8px;
+        border: 1px solid var(--line); font-size: .85rem; color: var(--dim);
+        word-break: break-word; }
+  .tx b { color: var(--text); font-weight: 500; }
+  .note { margin-top: 12px; font-size: .82rem; color: var(--warn); }
+  footer { margin-top: 18px; font-size: .78rem; color: var(--dim); text-align: center; }
+  footer a { color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Ghana Speech ID</h1>
+  <p class="sub">Speak, and it tells you which of 41 Ghanaian and West African languages
+     you spoke.</p>
+
+  <div class="card">
+    <button id="rec">Hold on — checking microphone…</button>
+
+    <div class="meter" id="meterBox"><i id="meter"></i></div>
+    <div class="timer"><span id="elapsed">0.0s</span><span id="target">aim for 5 seconds</span></div>
+
+    <div class="hint" id="hint">Tap to record. Say a full sentence — a few words is not
+      enough to tell these languages apart.</div>
+
+    <div id="out">
+      <div class="lang" id="lang"></div>
+      <div class="conf" id="conf"></div>
+      <div class="bars" id="bars"></div>
+      <div class="tx" id="tx"></div>
+      <div class="note" id="note"></div>
+    </div>
+  </div>
+
+  <footer>
+    <a href="https://github.com/GhanaNLP/ghana-speech-id">github</a> ·
+    <a href="https://huggingface.co/ghananlpcommunity/ghana-speech-id">model</a> ·
+    41 languages, no English · runs on CPU
+  </footer>
+</div>
+
+<script>
+const WARM = "https://ghana-nlp-2--ghana-speech-id-identifier-warm.modal.run";
+const IDENTIFY = "https://ghana-nlp-2--ghana-speech-id-identifier-identify.modal.run";
+
+// Measured accuracy against how much speech the model gets: 72% at ~0.8s, 89% at ~1.6s,
+// 95% at ~3.3s. Below MIN the answer is not worth showing; TARGET is where it plateaus.
+const MIN_SEC = 3.0, TARGET_SEC = 5.0, MAX_SEC = 20.0;
+const SR = 16000;
+const QUIET_RMS = 0.012;      // below this the recogniser tends to return nothing
+
+const el = id => document.getElementById(id);
+const btn = el("rec");
+let ctx, stream, node, src, chunks = [], recording = false, t0 = 0, raf = 0;
+let peakSeen = 0, warmed = false;
+
+function displayName(label) {
+  // "Bassar_Ntcham_bud" -> "Bassar Ntcham"; the trailing ISO code is not for readers
+  const p = label.split("_");
+  if (p.length > 1 && /^[a-z]{2,4}$/.test(p[p.length - 1])) p.pop();
+  return p.join(" ");
+}
+
+function setHint(text, cls = "") { el("hint").className = "hint " + cls; el("hint").textContent = text; }
+
+// Fired the instant the button is pressed, before the permission prompt. Containers scale
+// to zero and cold start is about 8 seconds; the prompt plus the recording usually covers
+// it, so the user rarely waits. Nothing runs while nobody is recording.
+function warm() {
+  if (warmed) return;
+  warmed = true;
+  fetch(WARM, { mode: "cors" }).catch(() => {});
+}
+
+function encodeWav(samples, sampleRate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, samples.length * 2, true);
+  let o = 44;
+  for (let i = 0; i < samples.length; i++, o += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+function tick() {
+  if (!recording) return;
+  const secs = (performance.now() - t0) / 1000;
+  el("elapsed").textContent = secs.toFixed(1) + "s";
+  if (secs < MIN_SEC) {
+    el("target").textContent = "keep going — " + (MIN_SEC - secs).toFixed(1) + "s more";
+  } else if (secs < TARGET_SEC) {
+    el("target").textContent = "good — a little longer is better";
+  } else {
+    el("target").textContent = "plenty — tap to stop";
+  }
+  if (secs >= MAX_SEC) { stop(); return; }
+  raf = requestAnimationFrame(tick);
+}
+
+async function start() {
+  warm();                                  // before the permission prompt, deliberately
+  setHint("Allow microphone access…");
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true,
+               autoGainControl: true }
+    });
+  } catch (e) {
+    setHint("Microphone blocked. Allow access in your browser and try again.", "bad");
+    return;
+  }
+  // Ask the browser for 16 kHz directly rather than resampling afterwards: the recogniser
+  // wants 16 kHz mono, and a naive downsample introduces aliasing that costs accuracy.
+  ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
+  if (ctx.state === "suspended") await ctx.resume();
+  src = ctx.createMediaStreamSource(stream);
+  node = ctx.createScriptProcessor(4096, 1, 1);
+  chunks = []; peakSeen = 0;
+
+  node.onaudioprocess = e => {
+    if (!recording) return;
+    const inp = e.inputBuffer.getChannelData(0);
+    chunks.push(new Float32Array(inp));
+    let sum = 0;
+    for (let i = 0; i < inp.length; i++) sum += inp[i] * inp[i];
+    const rms = Math.sqrt(sum / inp.length);
+    peakSeen = Math.max(peakSeen, rms);
+    const pct = Math.min(100, (rms / 0.15) * 100);
+    el("meter").style.width = pct + "%";
+    el("meterBox").className = "meter" + (peakSeen < QUIET_RMS ? " low" : "");
+  };
+  src.connect(node); node.connect(ctx.destination);
+
+  recording = true; t0 = performance.now();
+  el("out").style.display = "none";
+  btn.dataset.state = "recording"; btn.textContent = "Stop";
+  setHint("Listening — speak a full sentence.");
+  tick();
+}
+
+async function stop() {
+  if (!recording) return;
+  recording = false; cancelAnimationFrame(raf);
+  const secs = (performance.now() - t0) / 1000;
+  try { node.disconnect(); src.disconnect(); stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+  const rate = ctx.sampleRate; try { await ctx.close(); } catch (e) {}
+  el("meter").style.width = "0%";
+  btn.dataset.state = ""; btn.textContent = "Record";
+
+  if (secs < MIN_SEC) {
+    setHint("Only " + secs.toFixed(1) + "s — too short to be reliable. Try a full sentence.",
+            "warn");
+    return;
+  }
+  if (peakSeen < QUIET_RMS) {
+    setHint("That was very quiet. Move closer to the microphone and try again.", "warn");
+    return;
+  }
+
+  let n = 0; chunks.forEach(c => n += c.length);
+  const all = new Float32Array(n);
+  let off = 0; chunks.forEach(c => { all.set(c, off); off += c.length; });
+
+  btn.disabled = true;
+  setHint("Identifying…");
+  const wav = encodeWav(all, rate);
+  const b64 = await new Promise(res => {
+    const r = new FileReader();
+    r.onloadend = () => res(String(r.result).split(",")[1]);
+    r.readAsDataURL(wav);
+  });
+
+  try {
+    const resp = await fetch(IDENTIFY, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audio: b64 })
+    });
+    show(await resp.json());
+  } catch (e) {
+    setHint("Could not reach the service. Try again in a moment.", "bad");
+  }
+  btn.disabled = false;
+}
+
+function show(d) {
+  if (!d || !d.ok) {
+    const why = d && d.reason ? d.reason : "something went wrong";
+    setHint(why === "no speech recognised"
+      ? "No speech recognised. Speak a little louder, or closer to the microphone."
+      : "Could not identify: " + why, "warn");
+    return;
+  }
+  setHint("Tap to record again.");
+  el("lang").textContent = displayName(d.language);
+  el("conf").textContent = Math.round(d.confidence * 100) + "% confident · "
+    + d.seconds + "s of audio · " + d.chars + " characters recognised";
+  el("bars").innerHTML = d.top.map(t =>
+    '<div class="bar"><span>' + displayName(t.language) + '</span>'
+    + '<span class="t"><i style="width:' + Math.round(t.score * 100) + '%"></i></span>'
+    + '<span class="n">' + Math.round(t.score * 100) + '%</span></div>').join("");
+  el("tx").innerHTML = "<b>Heard:</b> " + d.transcript;
+  el("note").textContent = d.short
+    ? "Short sample — accuracy is noticeably lower below about 40 characters. "
+      + "A longer sentence will be more reliable."
+    : "";
+  el("out").style.display = "block";
+}
+
+btn.onclick = () => recording ? stop() : start();
+
+// Only enable the button once we know a microphone is reachable, so the first tap is not a
+// dead end. This asks nothing and grants nothing -- the permission prompt comes on tap.
+(async () => {
+  if (!navigator.mediaDevices || !window.AudioContext && !window.webkitAudioContext) {
+    btn.textContent = "Not supported in this browser"; return;
+  }
+  btn.disabled = false; btn.textContent = "Record";
+})();
+</script>
+</body>
+</html>
