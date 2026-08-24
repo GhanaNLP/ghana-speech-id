@@ -5,7 +5,9 @@ reimplementations of the tokeniser and n-gram lookup -- Python and C++ -- agains
 each other. Those are where a silent feature mismatch would live, and it would show up only
 as unexplained accuracy loss in the app.
 """
-import subprocess, sys
+import subprocess
+import sys
+
 import joblib
 import pyarrow.parquet as pq
 from ghana_speech_id import GhanaSpeechId

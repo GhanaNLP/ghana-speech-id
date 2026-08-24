@@ -8,4 +8,4 @@ language those units are.
 from ghana_speech_id.model import DEFAULT_REPO, GhanaSpeechId, Prediction
 
 __version__ = "0.1.0"
-__all__ = ["GhanaSpeechId", "Prediction", "DEFAULT_REPO"]
+__all__ = ["DEFAULT_REPO", "GhanaSpeechId", "Prediction"]

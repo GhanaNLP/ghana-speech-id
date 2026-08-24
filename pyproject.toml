@@ -52,3 +52,22 @@ include = ["python/", "scripts/", "src/", "include/", "tests/", "bindings/",
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+
+# Pinned rather than left to ruff's defaults, which move between releases and made CI fail
+# on rules that were never chosen.
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "W", "RUF"]
+ignore = [
+  "E501",    # line length is enforced by the formatter setting above
+  "E702",    # `a = x; b = y` for tightly-coupled assignments reads better than two lines
+  "E741",    # `l` for a label or line is unambiguous in context here
+  "RUF001",  # ambiguous unicode: ɛ ɔ ŋ are the subject matter, not a typo
+  "RUF002",
+  "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The decode scripts deliberately swallow per-clip failures: one corrupt audio cell must not
+# abort a three-hour run over hundreds of thousands of clips. The exception carries nothing
+# actionable -- the clip is skipped and the count reported at the end.
+"scripts/*" = ["BLE001", "S112", "SIM115", "PLW1510", "T201"]

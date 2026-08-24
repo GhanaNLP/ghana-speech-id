@@ -18,7 +18,10 @@ Two corrections applied on the way in.
           Ghanaian distribution, so length carries no class information.
 """
 from __future__ import annotations
-import argparse, glob, random
+
+import argparse
+import glob
+import random
 
 import numpy as np
 import pyarrow as pa

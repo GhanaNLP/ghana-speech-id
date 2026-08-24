@@ -9,17 +9,20 @@ Units are space separated and several are multi-character (kʰ, k͡p, t͡ʃ, nʷ
 here splits on whitespace, never on characters.
 """
 from __future__ import annotations
-import argparse, json, time, re
-from collections import Counter, defaultdict
+
+import argparse
+import json
+import time
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
-from sklearn.svm import LinearSVC
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
+from sklearn.svm import LinearSVC
 
 # Approximate genetic grouping, used only to read the confusion matrix -- close relatives
 # are where LID errors concentrate and an overall accuracy number hides that.

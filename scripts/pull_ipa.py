@@ -6,6 +6,7 @@ httpfs does that pushdown well and parallelises across files; pyarrow-over-HfFil
 not (minutes per file vs seconds).
 """
 import time
+
 import duckdb
 from huggingface_hub import get_token
 

@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import os
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
 
 import numpy as np
 
@@ -113,7 +113,7 @@ class GhanaSpeechId:
         variant: str = DEFAULT_VARIANT,
         fp16: bool = False,
         num_threads: int = 1,
-    ) -> "GhanaSpeechId":
+    ) -> GhanaSpeechId:
         """Load from a local directory or pull one from the Hugging Face Hub.
 
         :param model: a directory holding ``head.onnx``/``head.fp16.onnx``, ``ngrams.txt``,
@@ -168,7 +168,7 @@ class GhanaSpeechId:
         vals = np.fromiter(grams.values(), np.float32, len(grams))
         return keys, vals
 
-    def _unit_grams(self, text: str) -> "Counter[int]":
+    def _unit_grams(self, text: str) -> Counter[int]:
         """Whitespace tokens ARE the phonemes for an IPA head, several of them
         multi-character (kʰ, k͡p, t͡ʃ), so they must never be split on characters."""
         units = text.split()
@@ -188,7 +188,7 @@ class GhanaSpeechId:
                     hits[idx] += 1
         return hits
 
-    def _char_wb_grams(self, text: str) -> "Counter[int]":
+    def _char_wb_grams(self, text: str) -> Counter[int]:
         """Reproduce sklearn's analyzer="char_wb" exactly.
 
         Each whitespace-delimited word is padded with one space either side and n-grams are

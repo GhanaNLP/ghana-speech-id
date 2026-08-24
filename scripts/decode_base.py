@@ -46,7 +46,7 @@ def decode_cell(cell):
     if w.ndim > 1:
         w = w.mean(axis=1)
     if sr != SR:
-        n = int(round(len(w) * SR / sr))
+        n = round(len(w) * SR / sr)
         w = np.interp(np.linspace(0, len(w) - 1, n), np.arange(len(w)), w).astype(np.float32)
     return w
 

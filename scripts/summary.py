@@ -1,4 +1,6 @@
-import json, glob
+import glob
+import json
+
 rows = []
 for f in sorted(glob.glob("out/*/metrics.json")):
     d = json.load(open(f))

@@ -15,7 +15,9 @@ Graph reproduces sklearn's TfidfVectorizer(sublinear_tf=True, norm='l2') exactly
   tf = 1 + log(count);  w = tf * idf[i];  w /= ||w||_2;  logits = W[i]^T w + b
 """
 from __future__ import annotations
-import argparse, json
+
+import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +28,6 @@ from onnx import TensorProto, helper, numpy_helper
 def build_graph(W: np.ndarray, b: np.ndarray, idf: np.ndarray, fp16: bool) -> onnx.ModelProto:
     """W: [D, C] class weights, b: [C] intercept, idf: [D]."""
     wdt = np.float16 if fp16 else np.float32
-    T = TensorProto.FLOAT16 if fp16 else TensorProto.FLOAT
 
     init = [
         numpy_helper.from_array(W.astype(wdt), "W"),

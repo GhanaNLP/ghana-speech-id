@@ -14,7 +14,13 @@ which does two jobs at once:
     ~7 s, and left alone the head would learn "long string = English".
 """
 from __future__ import annotations
-import argparse, glob, io, os, random, time
+
+import argparse
+import glob
+import io
+import os
+import random
+import time
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
@@ -45,7 +51,7 @@ def decode_audio(cell):
     if w.ndim > 1:
         w = w.mean(axis=1)
     if sr != SR:
-        n = int(round(len(w) * SR / sr))
+        n = round(len(w) * SR / sr)
         w = np.interp(np.linspace(0, len(w) - 1, n), np.arange(len(w)), w).astype(np.float32)
     return w
 

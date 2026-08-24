@@ -1,4 +1,6 @@
-import json, sys
+import json
+import sys
+
 tag = sys.argv[1] if len(sys.argv) > 1 else "ceiling_char_mf200000_truth"
 d = json.load(open(f"out/{tag}/metrics.json"))
 print(f"{tag}")
@@ -6,7 +8,7 @@ print(f"  accuracy {d['accuracy']:.4f}  macro-F1 {d['macro_f1']:.4f}  feats {d['
 print(f"  family accuracy {d['family_accuracy']:.4f}")
 print("\naccuracy vs first-K units/chars:")
 for k, v in d["length_curve"].items():
-    print(f"  first {str(k):>4}: acc {v['acc']:.4f}  macroF1 {v['macro_f1']:.4f}")
+    print(f"  first {k!s:>4}: acc {v['acc']:.4f}  macroF1 {v['macro_f1']:.4f}")
 per = {k: v for k, v in d["per_language"].items()
        if k not in ("accuracy", "macro avg", "weighted avg")}
 print("\nweakest languages:")

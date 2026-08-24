@@ -23,9 +23,9 @@ from __future__ import annotations
 import argparse
 import glob
 import io
-from collections import defaultdict
 import random
 import time
+from collections import defaultdict
 
 import numpy as np
 import pyarrow as pa
@@ -47,7 +47,7 @@ def decode_cell(cell):
 def resample_to_16k(w, sr):
     if sr == SR:
         return w
-    n = int(round(len(w) * SR / sr))
+    n = round(len(w) * SR / sr)
     return np.interp(np.linspace(0, len(w) - 1, n), np.arange(len(w)), w).astype(np.float32)
 
 
@@ -69,8 +69,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    from ghana_ipa_asr.batch import (ctc_collapse, load_model, make_batches, resolve_model,
-                                     run_batch)
+    from ghana_ipa_asr.batch import ctc_collapse, load_model, make_batches, resolve_model, run_batch
 
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True

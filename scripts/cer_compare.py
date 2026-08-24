@@ -18,7 +18,6 @@ import argparse
 import glob
 import io
 import re
-import time
 import unicodedata
 
 import numpy as np

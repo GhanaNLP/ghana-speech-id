@@ -5,7 +5,10 @@ other half -- the tokenisation and n-gram lookup that the C++ reimplements. A mi
 means the app would see different features from the trainer, which is the failure mode that
 would otherwise only show up as unexplained accuracy loss on device.
 """
-import argparse, subprocess, sys
+import argparse
+import subprocess
+import sys
+
 import joblib
 import pyarrow.parquet as pq
 
