@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="ghana-speech-id",
         description="Identify the language of an IPA phoneme string.")
-    ap.add_argument("ipa", nargs="*", help="phoneme string; omit to read stdin")
+    ap.add_argument("text", nargs="*", help="transcript; omit to read stdin")
     ap.add_argument("--model", default=DEFAULT_REPO,
                     help="local model directory or Hugging Face repo id")
     ap.add_argument("--variant", default=DEFAULT_VARIANT, choices=["300m", "1b"],
@@ -31,8 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     lid = GhanaSpeechId.load(args.model, variant=args.variant, fp16=args.fp16,
                              num_threads=args.threads)
 
-    if args.ipa:
-        lines = [" ".join(args.ipa)]
+    if args.text:
+        lines = [" ".join(args.text)]
     elif args.file:
         with open(args.file, encoding="utf-8") as fh:
             lines = [l.rstrip("\n") for l in fh]

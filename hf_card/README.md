@@ -102,6 +102,13 @@ On device there is no Python: sherpa-onnx produces the transcript and the head r
 onnxruntime through a C API, with Kotlin and Swift bindings. See
 [the repository](https://github.com/GhanaNLP/ghana-speech-id).
 
+## Speed
+
+CPU only; there is no GPU path and none is needed. Single thread, including tokenisation:
+**0.064 ms per classification in C++** (36 MB resident) and 0.09–0.20 ms in Python. That is
+roughly four orders of magnitude cheaper than the speech recognition in front of it, so on
+any device that can run the ASR, language identification is free.
+
 ## Evaluation
 
 **In-domain** holds out the last 15% of each language by id. The audio is scripture read in

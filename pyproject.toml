@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ghana-speech-id"
-version = "0.1.0"
-description = "Language identification for Ghanaian and West African speech, over IPA phonemes"
+version = "0.1.1"
+description = "Language identification for 41 Ghanaian and West African languages, from speech transcripts"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"

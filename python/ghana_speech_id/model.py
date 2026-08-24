@@ -127,10 +127,12 @@ class GhanaSpeechId:
         if not path.is_dir():
             from huggingface_hub import snapshot_download
 
+            # Patterns are matched against the full relative path, so a bare "ngrams.txt"
+            # never matches "300m/ngrams.txt" and the variant directories come down empty.
             path = Path(
                 snapshot_download(
                     str(model),
-                    allow_patterns=["*.onnx", "ngrams.txt", "labels.txt", "head_config.txt"],
+                    allow_patterns=["*.onnx", "*.txt", "config.json"],
                 )
             )
 

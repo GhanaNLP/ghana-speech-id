@@ -54,6 +54,28 @@ with at a useful rate. But the 1b is meaningfully better on very short input:
 | 40 chars | ~3.3 s | 94.6% | 94.6% |
 | full | — | 95.3% | 95.2% |
 
+## Speed and footprint
+
+CPU only. There is no GPU path in the inference library and none is wanted: the head is a
+vocabulary lookup and one sparse gather, so a GPU would spend more time on transfers than on
+arithmetic. Both runtimes pin the CPU execution provider.
+
+Single thread, measured end to end including tokenisation:
+
+| runtime | per classification | throughput | resident | load |
+|---|---|---|---|---|
+| **C++** (Xeon 8558) | **0.064 ms** | 15,700/s | **36 MB** | — |
+| Python (Ryzen 5 4500U) | 0.09–0.20 ms | 5,500–10,000/s | 90 MB | 0.66 s cached |
+
+Latency scales mildly with transcript length — 0.091 ms at 26 characters, 0.197 ms at 72 —
+because the work is proportional to the number of n-grams extracted.
+
+For context, the head is roughly four orders of magnitude cheaper than the speech
+recognition in front of it. On any device that can run the ASR at all, language
+identification is free.
+
+Model files are 8.2 MB for the head plus 0.3 MB of vocabulary.
+
 ## Using it
 
 ### Python
