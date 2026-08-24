@@ -64,13 +64,13 @@ distinction that may matter to users. Your call.
 **English.** Dropped, because its only training audio is the low-passed corpus above and its
 recall is unmeasured -- ghana-speech-eval has no English config. Including it cost 0.2
 points out of domain, so it is cheap rather than harmful. It can return from any full-band
-Ghanaian English source; `africa-accents` on the H200 looked plausible but I did not want to
-pick unattended.
+Ghanaian English source; `africa-accents` on the H200 looked plausible. Adding it is about
+twenty minutes now the pipeline exists: decode, `build_base_corpus.py --en`, retrain.
 
-**The 1B model.** Matches the 300M on decode density everywhere tested but produced cleaner
-text on hard clips, where the 300M occasionally drifts into other scripts (`ysadam 看n
-wnejum我azemno dyɛn`). Full decode would be about 24 h. Worth it only if script drift shows
-up as a real error source.
+**The 1B model.** Built and published. It ties the 300M out of domain, trails slightly
+in-domain, and wins by about two points below three seconds of speech. sherpa-onnx ships it
+int8-only, and int8 has no CUDA kernels, so bulk decoding needs fairseq2 (283x) rather than
+sherpa (4-5x); on-device single-clip inference through sherpa int8 is fine.
 
 **Rejection is still weak.** At 80% of in-set answers retained it rejects 51.7% of
 out-of-set speech. Better than the IPA head's 26.6%, not good enough to rely on. Out-of-set
@@ -79,11 +79,10 @@ nearest relative in the label set.
 
 ## Not done
 
-The C++ library and pip package still tokenise IPA units. If the orthographic head ships,
-both need character n-grams, and `char_wb` has two traps documented in
-`docs-char-tokenisation.md`: it counts codepoints rather than bytes, and `lowercase=True` is
-Unicode folding that `std::tolower` cannot do. `--no-lowercase` avoids the second at
-whatever accuracy it costs -- unmeasured.
+Both runtimes now do character n-grams and are parity-checked, so that item is closed. The
+Unicode folding question was solved by deriving `casefold.txt` from the vocabulary at export
+time rather than depending on ICU, which means `--no-lowercase` was never needed and its
+cost is still unmeasured.
 
 `ipa_text.parquet` holds about 7,500 duplicate ids, so the *old* IPA head's numbers may
 include a small train/test overlap. It does not affect anything above.

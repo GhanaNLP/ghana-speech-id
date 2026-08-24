@@ -1,127 +1,94 @@
 # ghana-speech-id
 
-Language identification for Ghanaian and West African speech, as a small classifier over
-IPA phoneme strings.
+Language identification for 41 Ghanaian and West African languages, as a small classifier
+over speech transcripts.
 
-It sits on top of [ghana-ipa-asr](https://github.com/GhanaNLP/ghana-ipa-asr): that model
-turns audio into IPA units, and this one says which language those units are.
+It sits on top of [Omnilingual ASR](https://huggingface.co/facebook/omnilingual-asr): that
+model turns audio into text, and this one says which language the text is in.
 
 ```
-audio ──[sherpa-onnx + ghana-speech-phoneme-asr]──▶ IPA units ──[this]──▶ language
+audio ──[sherpa-onnx + omniASR CTC]──▶ transcript ──[this]──▶ language
 ```
 
 The inference library is C++ with a C API. No Python on the device.
 
-> **Status: work in progress.** Numbers below are in-domain (read scripture and broadcast
-> audio). The out-of-domain evaluation on WaxalNLP is not finished, so treat these as an
-> upper bound on real-world behaviour.
-
-## Why phonemes and not audio
-
-The obvious design is to pool the ASR encoder's hidden states and classify those. It was
-rejected for one reason: the training corpus is Bible narration with roughly one narrator
-per language, so a classifier fed continuous acoustic features learns *narrator identity*,
-which correlates perfectly with the label and does not exist at inference. A phoneme string
-carries no voice and no microphone, so that shortcut is unavailable by construction.
-
-The cost is real and worth stating. Collapsing the encoder's 1024 floats per frame down to
-~10 symbols per second discards:
-
-* **tone** — the 176-unit inventory has no tone marks at all, and most Kwa and Gur
-  languages here are tonal. This is the largest single loss.
-* **timing and rhythm** — speech rate and syllable duration, which differ between families
-* **uncertainty** — where the recogniser wavered between two phones
-
-What survives is a rich phonotactic signal: length (`aː iː`), nasalisation (`ã ɛ̃`),
-aspiration (`kʰ tʰ`), labialisation (`nʷ kʷ`), labiovelars (`k͡p ɡ͡b ŋ͡m`), implosives
-(`ɓ ɗ`), ejectives (`kʼ`) and prenasalised stops (`ⁿd ᵐb ᵑɡ`).
+```sh
+pip install ghana-speech-id
+```
 
 ## Results
 
-Held-out accuracy over 41 classes, **book-disjoint split** — the last 15% of each language
-by id, which since the audio is scripture read in order approximates holding out whole
-books.
+Two evaluations, and the gap between them is the point.
 
-| configuration | accuracy | macro-F1 |
-|---|---|---|
-| 1–5 grams, 200k features, punctuation kept | 94.19% | 0.945 |
-| 1–5 grams, 200k features, punctuation dropped | **94.66%** | **0.949** |
-| 1–5 grams, 50k features, punctuation dropped | 94.40% | 0.947 |
-| *same, random split (control, not a result)* | *96.67%* | *0.970* |
+**In-domain** is held-out audio from the training corpus, split so that the last 15% of each
+language by id is held back — the audio is scripture read in order, so that approximates
+holding out whole books.
 
-Dropping punctuation helps: it is only ~62% accurate upstream and carries little language
-signal.
+**Out-of-domain** is
+[ghana-speech-eval](https://huggingface.co/datasets/ghananlpcommunity/ghana-speech-eval),
+skipping its `bible_*` configs because those are the training domain. Five unrelated
+domains, 13,963 scored clips.
 
-**The random-split row is a control.** The 2-point gap over the book-disjoint split is how
-much a naive evaluation would have overstated things by scoring on verses adjacent to the
-training passages.
-
-### Accuracy against clip length
-
-Measured by truncating validation strings, so it says how much speech is needed before a
-decision is worth making.
-
-| units | ≈ audio | accuracy |
-|---|---|---|
-| 5 | ~0.5 s | 53.1% |
-| 10 | ~1 s | 76.0% |
-| 20 | ~2 s | 89.9% |
-| **40** | **~4 s** | **93.0%** |
-| 80 | ~8 s | 93.3% |
-| all | — | 93.4% |
-
-**Gate on the phoneme count, not a timer.** The knee is at ~40 units; the seconds column is
-derived at ~10 units/s and real speech runs 8–13/s, so a fixed 4-second timer under-serves
-slow speakers and wastes time on fast ones.
-
-### Where the errors are
-
-Almost every confusion is within language family, which is what a model that has learned
-real phonotactics looks like rather than one keying on artefacts.
-
-```
-Asante_Twi   → Akuapem_Twi   same-language dialects — now merged to Twi_twi
-Deg          → Vagla         both Grusi
-Chumburung   → Nkonya        both Guang
-Konkomba     → Bassar        both Gurma
-```
-
-Asante and Akuapem Twi share ISO 639-3 `twi` and were ~12% of all errors, so they are
-merged into one class. `twi` is the only duplicated ISO code across the 42, so the merge is
-exactly that collapse and nothing else. Fante is `fat` and separates cleanly, so it stays.
-
-### Model size
-
-The ONNX weight matrix is `features × classes × 4` bytes, so `max_features` is the knob
-that decides whether the head fits in an app.
-
-| features | accuracy | head.onnx | fp16 | ngrams.txt |
+| variant | features | in-domain | out-of-domain | size |
 |---|---|---|---|---|
-| 50k | 94.40% | 8.2 MB | ~4.1 MB | ~0.5 MB |
-| 200k | 94.66% | 33.6 MB | ~16.8 MB | 2.0 MB |
+| **300m** | 50k | 95.30% | **77.6%** | **8.2 MB** |
+| 300m | 200k | **95.44%** | 77.7% | 32.8 MB |
+| 1b | 50k | 95.15% | 77.4% | 8.2 MB |
+| 1b | 200k | 95.31% | 77.8% | 32.8 MB |
 
-## Using the library
+Out-of-domain by domain, for the shipped 300m/50k head:
+
+| finance | jw | lds | unicef | waxal |
+|---|---|---|---|---|
+| 42% | 76% | 81% | 92% | 89% |
+
+## Which variant
+
+**300m unless your utterances are very short.** The two are level from about three seconds
+of speech onward, and the 300m is a third the size and the only one sherpa-onnx can decode
+with at a useful rate. But the 1b is meaningfully better on very short input:
+
+| input | ≈ audio | 300m | 1b |
+|---|---|---|---|
+| 10 chars | ~0.8 s | 72.1% | **74.2%** |
+| 40 chars | ~3.3 s | 94.6% | 94.6% |
+| full | — | 95.3% | 95.2% |
+
+## Using it
+
+### Python
+
+```python
+import sherpa_onnx
+from ghana_speech_id import GhanaSpeechId
+
+rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(
+    model="omniasr-300m/model.int8.onnx", tokens="omniasr-300m/tokens.txt")
+lid = GhanaSpeechId.load()                    # variant="300m" by default
+
+s = rec.create_stream()
+s.accept_waveform(16000, wav)
+rec.decode_stream(s)
+
+print(lid.classify(s.result.text))            # Twi_twi (0.93)
+```
 
 ### C
 
 ```c
-#include "ghana_speech_id.h"
-
 GsidConfig cfg;
 gsid_config_init(&cfg);
-cfg.onnx_path   = "model/head.onnx";
-cfg.ngrams_path = "model/ngrams.txt";
-cfg.labels_path = "model/labels.txt";
-cfg.config_path = "model/head_config.txt";
+cfg.onnx_path   = "300m/head.onnx";
+cfg.ngrams_path = "300m/ngrams.txt";
+cfg.labels_path = "300m/labels.txt";
+cfg.config_path = "300m/head_config.txt";
 
 char err[512];
 GsidHead *h = gsid_create(&cfg, err, sizeof err);
 
-GsidResult r = gsid_classify(h, "n a e s o m e b a ɾ ɪ m ɔ");
+GsidResult r = gsid_classify(h, transcript);
 if (r.index >= 0) printf("%s %.3f\n", gsid_language(h, r.index), r.confidence);
 else              printf("unknown\n");
-
-gsid_destroy(h);
 ```
 
 `index == -1` means no n-gram matched, so there was no basis for a decision. Report it as
@@ -130,15 +97,66 @@ unknown rather than naming whichever language scored least badly.
 ### Command line
 
 ```sh
-gsid --model-dir model "n a e s o m e b a ɾ ɪ m ɔ"
-ghana-ipa-asr transcribe clip.wav | gsid --model-dir model --top 3
+ghana-speech-id "obiara na enyi nyɛden dɛ ɔbɔbɔ no nkenyan"
+ghana-speech-id --variant 1b --top 3 < transcripts.txt
 ```
 
 ### Android and iOS
 
-`bindings/android` has the JNI shim, a Kotlin wrapper and a CMake file to point
-`externalNativeBuild` at. `bindings/ios` has a Swift wrapper and a module map, so the C API
-imports directly with no Objective-C shim and no bridging header.
+`bindings/android` has the JNI shim, a Kotlin wrapper and a CMake file.
+`bindings/ios` has a Swift wrapper and a module map, so the C API imports with no
+Objective-C shim and no bridging header.
+
+## Why transcripts and not phonemes
+
+An earlier version classified IPA from a phoneme recogniser fine-tuned on this corpus. Two
+measurements changed the design.
+
+**Orthography beats IPA by five points.** On ground-truth text the same recipe reaches
+99.61% in-domain against the IPA head's 94.66% at equal model size. Spelling conventions,
+function words and morphology carry language identity that phonemes discard — the 176-unit
+inventory has no tone marks at all, and most of these languages are tonal.
+
+**The fine-tuned front end had stopped generalising.** It was trained on 2,329 h of Bible
+audio with the encoder unfrozen from step 0, and lost the ability to read anything else. On
+identical JW recordings it produces 1.13 characters per second with 35% of clips empty,
+where the base model it was fine-tuned *from* produces 8.36 and none. Rebuilding on the base
+model took out-of-domain accuracy from **36.3% to 77.6%**.
+
+## Why short training windows
+
+The head is trained on 40-character windows with stride 20 — about 3.3 seconds of speech —
+rather than whole transcripts. Training on whole clips and deploying on short utterances is
+a mismatch: the model saw a mean of 87 characters and has to decide from 25–50.
+
+Worth +1.1 points out of domain, and much more where it matters:
+
+| input | ≈ audio | whole-trained | window-trained |
+|---|---|---|---|
+| 10 chars | ~0.8 s | 67.4% | **72.1%** |
+| 20 chars | ~1.6 s | 86.4% | **89.4%** |
+| full | — | 95.4% | 95.4% |
+
+Inference classifies the whole transcript in one pass. Voting across windows was
+implemented and measured: −0.6 out of domain, −0.09 in-domain, and it compresses the margins
+that out-of-set rejection depends on. The code remains, defaulted off.
+
+## Limitations
+
+**Closed set.** The head always names one of its 41 classes. Ga, Ahanta and Ikposo are not
+among them and come back as their nearest relative — Ga as Dangme, Ahanta as Nzema. The
+top-1/top-2 margin gives a rejection signal, but a weak one: at 80% of in-set answers
+retained it rejects about half of out-of-set speech.
+
+**Fante collapses into Twi out of domain**, scoring 0.12–0.52 across three configs despite
+0.98 F1 on clean text. ASR noise erases an Akan boundary the head can otherwise learn.
+
+**No English class.** The only Ghanaian English corpus available is low-passed — 93% of its
+energy below 1 kHz and 1.6% in the 2–4 kHz band where consonants live — and a real ASR
+returns nothing for 82% of it. English can be added from any full-band source.
+
+**Domain still matters.** 95% in-domain against 78% out of domain. Finance recordings are
+the weakest at 42%.
 
 ## Building
 
@@ -149,9 +167,8 @@ GSID_MODEL_DIR=model ./build/gsid_selftest
 ```
 
 Only dependency is onnxruntime. The ONNX graph uses **opset-13 core operators only** — no
-`com.microsoft` contrib ops — so it runs in mobile onnxruntime builds. `skl2onnx` would
-have emitted a contrib `Tokenizer` node, so the tf-idf arithmetic is built into the graph
-by hand instead:
+`com.microsoft` contrib ops — so it runs in mobile onnxruntime builds. The tf-idf arithmetic
+is built into the graph:
 
 ```
 inputs   indices int64[K], counts float32[K]
@@ -159,27 +176,39 @@ inputs   indices int64[K], counts float32[K]
 outputs  logits float32[C], probs float32[C]
 ```
 
-The caller only has to split on whitespace, emit 1–5-grams and look them up in
-`ngrams.txt`. Units are atomic — never split `k͡p`, `kʰ` or `t͡ʃ` on characters.
+The caller supplies n-gram indices and counts. Reproducing scikit-learn's `char_wb` exactly
+is the delicate part and has two traps that fail silently rather than raising — see
+[docs-char-tokenisation.md](docs-char-tokenisation.md). Every release is checked with
+`scripts/cpp_parity.py`: sklearn, the Python package and the C++ CLI must agree on every
+one of 200 held-out transcripts.
 
 ## Training
 
-See `scripts/`. In order:
+See `scripts/`, and [HANDOVER.md](HANDOVER.md) for what is settled and what is open.
 
 | script | what it does |
 |---|---|
-| `setup_lean.sh` | venv and dependencies; no torch, no fairseq2, no audio |
-| `pull_ipa.py` | pulls the IPA text columns from ghana-speech-ipa without the 50 GB of audio |
-| `rephonemise_english.py` | re-decodes Ghanaian English through ghana-ipa-asr |
-| `add_english.py` | folds English in as a class, size- and length-matched |
-| `train_head.py` | trains and evaluates one configuration |
-| `run_sweep.sh` | the configuration sweep and its summary table |
-| `export_onnx.py` | exports to ONNX and checks parity against sklearn |
-| `cpp_parity.py` | checks the C++ CLI against the Python model |
-| `ood_waxal.py` | the WaxalNLP out-of-domain evaluation |
+| `setup_lean.sh` | venv and dependencies |
+| `pull_ipa.py` | corpus text without downloading the audio |
+| `decode_base.py` | transcribe with a base omniASR model via sherpa-onnx |
+| `decode_fairseq2.py` | same via fairseq2, for the 1B which sherpa ships int8-only |
+| `build_base_corpus.py` | assemble the training corpus |
+| `train_head.py` | train and evaluate one configuration |
+| `export_onnx.py` | export to ONNX, check parity against sklearn |
+| `cpp_parity.py` | check the C++ and Python runtimes against the trainer |
+| `ood_eval.py` | the out-of-domain evaluation |
+| `publish_hf.py` | publish both variants to the Hub |
 
-Everything is verified end to end before shipping: ONNX matches sklearn 300/300 on argmax
-(max logit difference 6.3e-06), and the C++ CLI matches the Python model 300/300.
+Quantisation has to follow the device, and getting it wrong is expensive:
+
+| | CPU | CUDA |
+|---|---|---|
+| int8 | 17× | 7× |
+| fp32 | 13× | **111×** |
+
+int8 on CUDA is slower than not using the GPU at all — quantised operators have no CUDA
+kernels, so onnxruntime places them on CPU node by node. int8 is still right for on-device
+inference.
 
 ## Licence
 

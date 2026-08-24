@@ -6,15 +6,14 @@ tags:
   - spoken-language-identification
   - onnx
   - sherpa-onnx
-  - ipa
-  - phonemes
+  - orthography
+  - omnilingual-asr
   - ghana
   - africa
 library_name: ghana-speech-id
 datasets:
-  - ghananlpcommunity/ghana-speech-ipa
+  - ghananlpcommunity/ghana-speech
   - ghananlpcommunity/ghana-speech-eval
-  - ghanaopendata/ghana-english-tts-clean2
 language:
   - twi
   - fat
@@ -57,98 +56,96 @@ language:
   - bib
   - hau
   - ffm
-  - eng
 ---
 
 # ghana-speech-id
 
-Language identification for Ghanaian and West African speech, as a small classifier over
-IPA phoneme strings.
+Language identification for 41 Ghanaian and West African languages, over speech transcripts.
 
-It sits on top of [ghana-ipa-asr](https://huggingface.co/ghananlpcommunity/ghana-speech-phoneme-asr):
-that model turns audio into IPA units, and this one says which language those units are.
+It sits on top of [Omnilingual ASR](https://huggingface.co/facebook/omnilingual-asr): that
+model turns audio into text, and this one says which language the text is in.
 
 ```
-audio ──[sherpa-onnx + ghana-speech-phoneme-asr]──▶ IPA units ──[this]──▶ language
+audio ──[sherpa-onnx + omniASR CTC]──▶ transcript ──[this]──▶ language
 ```
 
-> **Model artefacts are not uploaded yet.** This repository currently holds the
-> configuration and card while the final head is selected. Code, training pipeline and
-> evaluation live at https://github.com/GhanaNLP/ghana-speech-id
+Two variants live in this repository, differing only in which front end produced the
+transcripts they were trained on.
 
-## Why phonemes and not audio
+| variant | front end | in-domain | out-of-domain | size |
+|---|---|---|---|---|
+| **`300m/`** | omniASR CTC 300M | 95.30% | **77.6%** | 8.2 MB |
+| `1b/` | omniASR CTC 1B v2 | 95.15% | 77.4% | 8.2 MB |
 
-The obvious design is to pool the ASR encoder's hidden states and classify those. It was
-rejected deliberately: the training corpus is Bible narration with roughly one narrator per
-language, so a classifier fed continuous acoustic features learns *narrator identity*, which
-correlates perfectly with the label and does not exist at inference. A phoneme string carries
-no voice and no microphone, so that shortcut is unavailable by construction.
-
-The cost is real. Collapsing 1024 floats per frame to ~10 symbols per second discards tone
-(the 176-unit inventory has no tone marks, and most Kwa and Gur languages here are tonal),
-rhythm, and the recogniser's uncertainty. What survives is phonotactics: length, nasalisation,
-aspiration, labialisation, labiovelars, implosives, ejectives and prenasalised stops.
+**Use `300m` unless your utterances are very short.** The two are level from about three
+seconds of speech onward, and the 300M front end is a third the size and the only one
+sherpa-onnx decodes at a useful rate. Below that the 1B is better: at ~0.8 s of speech it
+scores 74.2% against 72.1%.
 
 ## Usage
 
 ```python
-from ghana_ipa_asr import GhanaIPAASR
+import sherpa_onnx
 from ghana_speech_id import GhanaSpeechId
 
-asr = GhanaIPAASR.load()
-lid = GhanaSpeechId.load("ghananlpcommunity/ghana-speech-id")
+rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(
+    model="omniasr-300m/model.int8.onnx", tokens="omniasr-300m/tokens.txt")
+lid = GhanaSpeechId.load("ghananlpcommunity/ghana-speech-id")   # variant="300m"
 
-ipa = asr.transcribe("clip.wav").spaced(punctuation=False)
-print(lid.classify(ipa))     # Twi_twi (0.93)
+s = rec.create_stream()
+s.accept_waveform(16000, wav)
+rec.decode_stream(s)
+print(lid.classify(s.result.text))
 ```
 
-```sh
-pip install ghana-speech-id
-ghana-ipa-asr transcribe clip.wav | ghana-speech-id
-```
-
-On device there is no Python: `sherpa-onnx` produces the IPA and the head runs in
-onnxruntime through the C API, with Kotlin and Swift bindings in the GitHub repository.
-
-## How much speech is needed
-
-Accuracy saturates at about **40 phoneme units**, roughly 4 seconds.
-
-| units | ≈ audio | accuracy |
-|---|---|---|
-| 10 | ~1 s | 76.0% |
-| 20 | ~2 s | 89.9% |
-| **40** | **~4 s** | **93.0%** |
-| all | — | 94.7% |
-
-Gate on the unit count rather than a timer: speech runs 8–13 units/s, so a fixed 4-second
-window under-serves slow speakers and wastes time on fast ones.
+On device there is no Python: sherpa-onnx produces the transcript and the head runs in
+onnxruntime through a C API, with Kotlin and Swift bindings. See
+[the repository](https://github.com/GhanaNLP/ghana-speech-id).
 
 ## Evaluation
 
-Held-out accuracy is measured on a **book-disjoint split** — the last 15% of each language
-by id, which since the audio is scripture read in order approximates holding out whole books.
-A random split scores 96.7% on the same configuration; that 2-point gap is passage-local
-memorisation, which the contiguous split exists to avoid.
+**In-domain** holds out the last 15% of each language by id. The audio is scripture read in
+order, so a contiguous tail approximates holding out whole books; a random split scores
+about two points higher, and that gap is passage-local memorisation.
 
-Almost every remaining error is within language family (Deg/Vagla, Chumburung/Nkonya,
-Konkomba/Bassar), which is what a model that has learned real phonotactics looks like.
+**Out-of-domain** is
+[ghana-speech-eval](https://huggingface.co/datasets/ghananlpcommunity/ghana-speech-eval)
+without its `bible_*` configs, since those are the training domain. Five unrelated domains,
+13,963 scored clips.
 
-Asante and Akuapem Twi share ISO 639-3 `twi` and were ~12% of all errors, so they are one
-class. `twi` is the only duplicated code among the languages, so the merge is exactly that
-collapse. Fante is `fat` and separates cleanly.
+| finance | jw | lds | unicef | waxal |
+|---|---|---|---|---|
+| 42% | 76% | 81% | 92% | 89% |
+
+## How it is built
+
+A linear classifier over character n-grams of the transcript, with tf-idf folded into the
+ONNX graph. Trained on 40-character windows (about 3.3 s) rather than whole transcripts,
+which is worth +1.1 points out of domain and +4.7 at one second of speech. Inference
+classifies the whole transcript in one pass.
+
+An earlier version used IPA phonemes from a recogniser fine-tuned on this corpus. Two
+measurements changed it: orthography beats IPA by five points at equal size, and the
+fine-tuned front end had lost the ability to read audio outside its training domain —
+1.13 characters per second with 35% of clips empty where the base model manages 8.36 and
+none. Rebuilding on the base model moved out-of-domain accuracy from 36.3% to 77.6%.
 
 ## Limitations
 
-* **Closed set.** The head always names one of its classes. Ga, Ahanta and Ikposo are not
-  among them and will come back as a related in-set language, usually with unremarkable
-  confidence. Threshold on the top-1/top-2 margin if you need to reject out-of-set speech.
-* **No tone.** The phoneme inventory carries none, so tonal minimal pairs are invisible.
-* **Domain.** Training audio is read scripture. Out-of-domain numbers on
-  [ghana-speech-eval](https://huggingface.co/datasets/ghananlpcommunity/ghana-speech-eval)
-  are pending and will be lower.
-* **Code-switching** is common in Ghana and handled badly by a single-label classifier.
+**Closed set.** The head always names one of its 41 classes. Ga, Ahanta and Ikposo are not
+among them and return their nearest relative — Ga as Dangme, Ahanta as Nzema. The top-1 minus
+top-2 margin gives a rejection signal, but a weak one: at 80% of in-set answers retained it
+rejects about half of out-of-set speech.
+
+**Fante collapses into Twi out of domain**, 0.12–0.52 across three configs, despite 0.98 F1
+on clean text. Recognition noise erases an Akan boundary the head can otherwise learn.
+
+**No English class.** The available Ghanaian English corpus is low-passed — 93% of its
+energy below 1 kHz — and a real ASR returns nothing for 82% of it.
+
+**Domain still matters.** 95% in-domain against 78% out of domain, and finance recordings
+are the weakest at 42%.
 
 ## Licence
 
-Code Apache-2.0. Model weights and data CC BY-NC 4.0, following the source audio corpus.
+Code Apache-2.0. Model weights and data CC BY-NC 4.0, following the source corpora.
