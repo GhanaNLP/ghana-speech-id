@@ -86,6 +86,10 @@ def main():
     ap.add_argument("--fp16", action="store_true", help="halves the weight matrix on disk")
     ap.add_argument("--data", default="/mnt/volume_d2wey28/projects/ghana-speech-id/data/ipa_text.parquet")
     ap.add_argument("--n-check", type=int, default=300)
+    ap.add_argument("--chunk-chars", type=int, default=0,
+                    help="record the window size the head was trained on so runtimes vote "
+                         "over the same spans")
+    ap.add_argument("--chunk-stride", type=int, default=20)
     args = ap.parse_args()
 
     import joblib
@@ -112,17 +116,42 @@ def main():
         "\n".join(inv[i] for i in range(len(inv))), encoding="utf-8")
     (outdir / "labels.txt").write_text("\n".join(labels), encoding="utf-8")
     # plain key/value alongside the JSON so the C++ runtime needs no JSON parser
+    # analyzer and lowercase are load-bearing: the runtimes read them to decide between
+    # phoneme-unit and char_wb tokenisation. Omitting them makes a char head silently
+    # tokenise as words, which costs accuracy without raising.
+    analyzer = "char" if vec.analyzer == "char_wb" else "word"
+
+    # Case folding is Unicode, not ASCII: Ɛ (U+0190) folds to ɛ (U+025B), which std::tolower
+    # cannot do. Rather than depend on ICU or hand-write a table, derive the exact mapping
+    # from the characters that actually occur in the vocabulary and ship it. Anything absent
+    # here never appears in training, so a runtime can pass it through unchanged.
+    fold = {}
+    for gram in vec.vocabulary_:
+        for ch in gram:
+            up = ch.upper()
+            if len(up) == 1 and up != ch and up.lower() == ch:
+                fold[up] = ch
+    (outdir / "casefold.txt").write_text(
+        "".join(f"{u}\t{l}\n" for u, l in sorted(fold.items())), encoding="utf-8")
     (outdir / "head_config.txt").write_text(
         f"ngram_min {vec.ngram_range[0]}\n"
         f"ngram_max {vec.ngram_range[1]}\n"
+        f"analyzer {analyzer}\n"
+        f"lowercase {1 if vec.lowercase else 0}\n"
+        f"chunk_chars {args.chunk_chars}\n"
+        f"chunk_stride {args.chunk_stride}\n"
         f"sublinear_tf 1\n"
         f"norm l2\n"
         f"n_features {W.shape[0]}\n"
         f"n_classes {W.shape[1]}\n", encoding="utf-8")
     (outdir / "head_config.json").write_text(json.dumps({
         "ngram_range": list(vec.ngram_range),
-        "sublinear_tf": True, "norm": "l2", "lowercase": False,
-        "token_pattern": "whitespace-split; units are atomic (k͡p, kʰ, t͡ʃ are single tokens)",
+        "sublinear_tf": True, "norm": "l2", "lowercase": bool(vec.lowercase),
+        "analyzer": analyzer,
+        "tokenisation": ("char_wb: each word padded with a space either side, n-grams taken "
+                         "within the padded word over CODEPOINTS not bytes"
+                         if analyzer == "char" else
+                         "whitespace-split; units are atomic (k͡p, kʰ, t͡ʃ are single tokens)"),
         "n_features": int(W.shape[0]), "n_classes": int(W.shape[1]),
         "inputs": {"indices": "int64[K] ngram ids", "counts": "float32[K] occurrence counts"},
         "outputs": {"logits": "float32[C]", "probs": "float32[C] softmax"},
@@ -140,6 +169,10 @@ def main():
     print(f"  {W.shape[0]} features x {W.shape[1]} classes")
     print(f"  ngrams.txt {(outdir/'ngrams.txt').stat().st_size/1e6:.1f} MB, "
           f"labels.txt {len(labels)} lines")
+    print(f"  analyzer {analyzer}, lowercase {bool(vec.lowercase)}, "
+          f"casefold.txt {len(fold)} mappings")
+    if args.chunk_chars:
+        print(f"  windows {args.chunk_chars} chars / stride {args.chunk_stride}")
 
     t = pq.read_table(args.data, columns=["ipa", "language", "split"]).to_pydict()
     samples = [(s_, l) for s_, l, sp in zip(t["ipa"], t["language"], t["split"])

@@ -51,6 +51,19 @@ CONFIG_TO_ISO = {
 PUNCT = set(".,!?;:\"'()-—…")
 
 
+def chunks(s: str, size: int, stride: int) -> list[str]:
+    """Same windowing the chunked head was trained on; must match or voting is scoring a
+    different distribution from the one the model learned."""
+    if size <= 0 or len(s) <= size:
+        return [s]
+    step = max(1, stride)
+    out = [s[i:i + size] for i in range(0, len(s) - size + 1, step)]
+    tail = s[-size:]
+    if out and out[-1] != tail:
+        out.append(tail)
+    return out
+
+
 def strip_punct(s: str) -> str:
     """Drop punctuation units.
 
@@ -90,6 +103,10 @@ def main():
     ap.add_argument("--model", required=True, help="model.joblib from train_head.py")
     ap.add_argument("--decoded", default="data/eval_ipa_gh.parquet",
                     help="output of decode_gpu.py --hf-eval")
+    ap.add_argument("--chunk-chars", type=int, default=0,
+                    help="window size for voted inference; must match how the head was "
+                         "trained")
+    ap.add_argument("--chunk-stride", type=int, default=20)
     ap.add_argument("--text-col", default="ipa",
                     help="transcript column; base decodes use 'text'")
     ap.add_argument("--keep-punct", action="store_true",
@@ -113,10 +130,30 @@ def main():
         keep = [i for i, s in enumerate(strings) if len(s.split()) >= 3]
         if not keep:
             return None, None, 0
-        X = vec.transform([strings[i] for i in keep])
-        dec = clf.decision_function(X)
-        if dec.ndim == 1:
-            dec = np.stack([-dec, dec], 1)
+        docs = [strings[i] for i in keep]
+
+        if args.chunk_chars:
+            # classify every window and sum decision values per document, exactly as the
+            # on-device path will: a confident window should outweigh several uncertain ones
+            flat, owner = [], []
+            for di, d in enumerate(docs):
+                for c in chunks(d, args.chunk_chars, args.chunk_stride):
+                    flat.append(c); owner.append(di)
+            acc = np.zeros((len(docs), len(labels)))
+            step = 20000
+            for b0 in range(0, len(flat), step):
+                sl = slice(b0, b0 + step)
+                d = clf.decision_function(vec.transform(flat[sl]))
+                if d.ndim == 1:
+                    d = np.stack([-d, d], 1)
+                for k, row in enumerate(d):
+                    acc[owner[b0 + k]] += row
+            dec = acc
+        else:
+            dec = clf.decision_function(vec.transform(docs))
+            if dec.ndim == 1:
+                dec = np.stack([-dec, dec], 1)
+
         order = np.argsort(dec, axis=1)
         pred = [labels[i] for i in order[:, -1]]
         margin = dec[np.arange(len(dec)), order[:, -1]] - dec[np.arange(len(dec)), order[:, -2]]

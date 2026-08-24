@@ -20,6 +20,7 @@ from typing import Iterable, Sequence
 import numpy as np
 
 DEFAULT_REPO = "ghananlpcommunity/ghana-speech-id"
+DEFAULT_VARIANT = "300m"
 
 
 @dataclass(frozen=True)
@@ -41,22 +42,22 @@ class Prediction:
 
 
 class GhanaSpeechId:
-    """Classify IPA phoneme strings into Ghanaian and West African languages.
+    """Classify a speech transcript into one of 41 Ghanaian and West African languages.
 
-    The phonemes come from ``ghana-ipa-asr``; this takes it from there::
+    The transcript comes from a base omniASR CTC model, which sherpa-onnx can run on
+    device::
 
-        from ghana_ipa_asr import GhanaIPAASR
+        import sherpa_onnx
         from ghana_speech_id import GhanaSpeechId
 
-        asr = GhanaIPAASR.load()
-        lid = GhanaSpeechId.load()
+        rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(
+            model="omniasr-300m/model.int8.onnx", tokens="omniasr-300m/tokens.txt")
+        lid = GhanaSpeechId.load()          # variant="300m" by default
 
-        ipa = asr.transcribe("clip.wav").spaced(punctuation=False)
-        print(lid.classify(ipa))
+        s = rec.create_stream(); s.accept_waveform(16000, wav); rec.decode_stream(s)
+        print(lid.classify(s.result.text))
 
-    Pass the recogniser's output unmodified. Units are space separated and several are
-    multi-character (``k͡p``, ``kʰ``, ``t͡ʃ``, ``nʷ``); splitting on characters turns one
-    sound into two and costs real accuracy.
+    Pass the recogniser's output unmodified.
     """
 
     def __init__(
@@ -88,6 +89,8 @@ class GhanaSpeechId:
         ]
 
         self.ngram_min, self.ngram_max = 1, 5
+        self.analyzer = "word"
+        self.lowercase = True
         if config_path and Path(config_path).exists():
             for line in Path(config_path).read_text(encoding="utf-8").splitlines():
                 key, _, val = line.partition(" ")
@@ -95,6 +98,10 @@ class GhanaSpeechId:
                     self.ngram_min = int(val)
                 elif key == "ngram_max":
                     self.ngram_max = int(val)
+                elif key == "analyzer":
+                    self.analyzer = val.strip()
+                elif key == "lowercase":
+                    self.lowercase = val.strip() not in ("0", "false", "False")
 
     # ------------------------------------------------------------------ loading
 
@@ -103,6 +110,7 @@ class GhanaSpeechId:
         cls,
         model: str | os.PathLike = DEFAULT_REPO,
         *,
+        variant: str = DEFAULT_VARIANT,
         fp16: bool = False,
         num_threads: int = 1,
     ) -> "GhanaSpeechId":
@@ -110,6 +118,9 @@ class GhanaSpeechId:
 
         :param model: a directory holding ``head.onnx``/``head.fp16.onnx``, ``ngrams.txt``,
             ``labels.txt`` and ``head_config.txt``, or a Hub repo id.
+        :param variant: which front-end the head was built on -- ``"300m"`` or ``"1b"``.
+            Both live in the same Hub repo. 300m is the default: smaller, faster on device,
+            and within a point of the 1b in accuracy.
         :param fp16: prefer the half-precision head, which is half the size on disk.
         """
         path = Path(model)
@@ -123,8 +134,15 @@ class GhanaSpeechId:
                 )
             )
 
-        # the exported artefacts may sit at the root or under onnx/
-        root = path if (path / "ngrams.txt").exists() else path / "onnx"
+        # variant subdirectory in the Hub repo; a local export may sit at the root or
+        # under onnx/
+        for cand in (path / variant, path, path / "onnx"):
+            if (cand / "ngrams.txt").exists():
+                root = cand
+                break
+        else:
+            raise FileNotFoundError(
+                f"no ngrams.txt under {path}/{variant}, {path} or {path}/onnx")
         names = ["head.fp16.onnx", "head.onnx"] if fp16 else ["head.onnx", "head.fp16.onnx"]
         onnx = next((root / n for n in names if (root / n).exists()), None)
         if onnx is None:
@@ -139,32 +157,60 @@ class GhanaSpeechId:
 
     # ------------------------------------------------------------------ features
 
-    def _featurise(self, ipa: str) -> tuple[np.ndarray, np.ndarray]:
-        units = ipa.split()
-        if not units:
+    def _featurise(self, text: str) -> tuple[np.ndarray, np.ndarray]:
+        if self.analyzer == "char":
+            grams = self._char_wb_grams(text)
+        else:
+            grams = self._unit_grams(text)
+        if not grams:
             return np.empty(0, np.int64), np.empty(0, np.float32)
+        keys = np.fromiter(grams.keys(), np.int64, len(grams))
+        vals = np.fromiter(grams.values(), np.float32, len(grams))
+        return keys, vals
 
+    def _unit_grams(self, text: str) -> "Counter[int]":
+        """Whitespace tokens ARE the phonemes for an IPA head, several of them
+        multi-character (kʰ, k͡p, t͡ʃ), so they must never be split on characters."""
+        units = text.split()
         vocab = self._vocab
         hits: Counter[int] = Counter()
-        n_max, n_min = self.ngram_max, self.ngram_min
         for i in range(len(units)):
             gram = ""
-            for n in range(1, n_max + 1):
+            for n in range(1, self.ngram_max + 1):
                 j = i + n - 1
                 if j >= len(units):
                     break
                 gram = units[j] if n == 1 else gram + " " + units[j]
-                if n < n_min:
+                if n < self.ngram_min:
                     continue
                 idx = vocab.get(gram)
                 if idx is not None:
                     hits[idx] += 1
-        if not hits:
-            return np.empty(0, np.int64), np.empty(0, np.float32)
+        return hits
 
-        keys = np.fromiter(hits.keys(), np.int64, len(hits))
-        vals = np.fromiter(hits.values(), np.float32, len(hits))
-        return keys, vals
+    def _char_wb_grams(self, text: str) -> "Counter[int]":
+        """Reproduce sklearn's analyzer="char_wb" exactly.
+
+        Each whitespace-delimited word is padded with one space either side and n-grams are
+        taken within that padded word only -- they never cross a word boundary. Iteration is
+        over Python characters, which are codepoints: 'kɔ' is two characters and three
+        bytes, and a byte-wise loop would split ɔ and generate n-grams that exist nowhere in
+        the vocabulary, silently costing accuracy rather than raising.
+        """
+        vocab = self._vocab
+        hits: Counter[int] = Counter()
+        src = text.lower() if self.lowercase else text
+        for word in src.split():
+            padded = f" {word} "
+            L = len(padded)
+            for n in range(self.ngram_min, self.ngram_max + 1):
+                if n > L:
+                    break
+                for i in range(L - n + 1):
+                    idx = vocab.get(padded[i:i + n])
+                    if idx is not None:
+                        hits[idx] += 1
+        return hits
 
     # ------------------------------------------------------------------ inference
 

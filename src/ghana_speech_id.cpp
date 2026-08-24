@@ -16,8 +16,10 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -28,6 +30,80 @@
 #define GSID_VERSION_STR "0.1.0"
 
 namespace {
+
+
+// ---------------------------------------------------------------- text
+
+// Byte offset of every codepoint start, plus the end. char_wb counts CHARACTERS, and 'kɔ'
+// is two characters in three bytes: a byte-wise loop would cut ɔ (U+0254) in half and emit
+// n-grams that exist nowhere in the vocabulary. That does not raise -- it just quietly
+// misclassifies -- so the whole tokeniser is written in terms of these offsets.
+void codepoint_offsets(const std::string &s, std::vector<size_t> *off) {
+  off->clear();
+  for (size_t i = 0; i < s.size();) {
+    off->push_back(i);
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    i += (c < 0x80) ? 1 : (c >> 5) == 0x06 ? 2 : (c >> 4) == 0x0E ? 3 : (c >> 3) == 0x1E ? 4 : 1;
+  }
+  off->push_back(s.size());
+}
+
+// Case folding here is Unicode, not ASCII: Ɛ (U+0190) folds to ɛ (U+025B). std::tolower
+// works a byte at a time and cannot express that. The table is generated at export time
+// from the characters that actually occur in the vocabulary, so it is exact for this model
+// and needs no ICU. Anything absent never appeared in training and passes through.
+class CaseFold {
+ public:
+  void load(const std::string &path) {
+    map_.clear();
+    std::ifstream in(path);
+    if (!in) return;                       // absent means the head was trained cased
+    std::string line;
+    while (std::getline(in, line)) {
+      const size_t tab = line.find('\t');
+      if (tab == std::string::npos) continue;
+      std::string up = line.substr(0, tab), lo = line.substr(tab + 1);
+      while (!lo.empty() && (lo.back() == '\r' || lo.back() == '\n')) lo.pop_back();
+      if (!up.empty() && !lo.empty()) map_[up] = lo;
+    }
+  }
+  size_t size() const { return map_.size(); }
+  void apply(const std::string &in, std::string *out) const {
+    out->clear();
+    out->reserve(in.size());
+    std::vector<size_t> off;
+    codepoint_offsets(in, &off);
+    for (size_t k = 0; k + 1 < off.size(); ++k) {
+      const std::string ch = in.substr(off[k], off[k + 1] - off[k]);
+      if (ch.size() == 1) {
+        const unsigned char c = static_cast<unsigned char>(ch[0]);
+        out->push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : ch[0]);
+        continue;
+      }
+      const auto it = map_.find(ch);
+      out->append(it == map_.end() ? ch : it->second);
+    }
+  }
+
+ private:
+  std::map<std::string, std::string> map_;
+};
+
+// Overlapping windows measured in CHARACTERS, matching how the head was trained. A short
+// transcript is one window rather than being dropped.
+void window(const std::string &s, int size, int stride, std::vector<std::string> *out) {
+  out->clear();
+  std::vector<size_t> off;
+  codepoint_offsets(s, &off);
+  const int n = static_cast<int>(off.size()) - 1;
+  if (size <= 0 || n <= size) { out->push_back(s); return; }
+  const int step = stride > 0 ? stride : size;
+  for (int i = 0; i + size <= n; i += step) {
+    out->push_back(s.substr(off[i], off[i + size] - off[i]));
+  }
+  const std::string tail = s.substr(off[n - size], s.size() - off[n - size]);
+  if (out->empty() || out->back() != tail) out->push_back(tail);
+}
 
 // ---------------------------------------------------------------- vocabulary
 
@@ -116,9 +192,14 @@ struct GsidHead {
   Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
   Vocab vocab;
+  CaseFold fold;
   std::vector<std::string> labels;
   int ngram_min = 1;
   int ngram_max = 5;
+  bool char_analyzer = false;   // char_wb over codepoints, vs whitespace phoneme units
+  bool lowercase = true;
+  int chunk_chars = 0;          // 0 classifies the whole transcript in one pass
+  int chunk_stride = 20;
 
   std::string in0, in1, out0, out1;   // node names, owned
 };
@@ -137,16 +218,67 @@ void split_units(const char *ipa, std::vector<std::string_view> *out) {
   }
 }
 
+// char_wb: each whitespace-delimited word is padded with one space either side and n-grams
+// are taken inside that padded word only, never across a word boundary. Iteration is over
+// codepoints, so a two-byte ɔ counts as one character exactly as scikit-learn counts it.
+void char_wb_hits(const GsidHead *h, const std::string &text, std::vector<int32_t> *hits) {
+  std::string folded;
+  if (h->lowercase) h->fold.apply(text, &folded);
+  const std::string &src = h->lowercase ? folded : text;
+
+  std::string word, padded;
+  size_t i = 0;
+  std::vector<size_t> off;
+  while (i <= src.size()) {
+    if (i == src.size() || src[i] == ' ' || src[i] == '\t' || src[i] == '\n' ||
+        src[i] == '\r') {
+      if (!word.empty()) {
+        padded.assign(" ").append(word).append(" ");
+        codepoint_offsets(padded, &off);
+        const int n = static_cast<int>(off.size()) - 1;
+        for (int len = h->ngram_min; len <= h->ngram_max; ++len) {
+          if (len > n) break;
+          for (int k = 0; k + len <= n; ++k) {
+            const int32_t id = h->vocab.find(
+                std::string_view(padded.data() + off[k], off[k + len] - off[k]));
+            if (id >= 0) hits->push_back(id);
+          }
+        }
+        word.clear();
+      }
+      if (i == src.size()) break;
+    } else {
+      word.push_back(src[i]);
+    }
+    ++i;
+  }
+}
+
 // Builds (indices, counts) for every in-vocabulary n-gram of order ngram_min..ngram_max.
 // Counts are accumulated by sorting the hit list -- cheaper than a hash map for the few
 // hundred n-grams a single utterance produces.
 int featurise(const GsidHead *h, const char *ipa,
               std::vector<int64_t> *indices, std::vector<float> *counts) {
+  std::vector<int32_t> hits;
+  if (h->char_analyzer) {
+    char_wb_hits(h, std::string(ipa), &hits);
+    if (hits.empty()) return 0;
+    std::sort(hits.begin(), hits.end());
+    indices->clear(); counts->clear();
+    for (size_t i = 0; i < hits.size();) {
+      size_t j = i;
+      while (j < hits.size() && hits[j] == hits[i]) ++j;
+      indices->push_back(static_cast<int64_t>(hits[i]));
+      counts->push_back(static_cast<float>(j - i));
+      i = j;
+    }
+    return static_cast<int>(hits.size());
+  }
+
   std::vector<std::string_view> units;
   split_units(ipa, &units);
   if (units.empty()) return 0;
 
-  std::vector<int32_t> hits;
   std::string gram;
   for (size_t i = 0; i < units.size(); ++i) {
     gram.clear();
@@ -172,6 +304,43 @@ int featurise(const GsidHead *h, const char *ipa,
     i = j;
   }
   return static_cast<int>(hits.size());
+}
+
+// Classify every window and sum logits across them.
+//
+// Summing logits rather than counting winners means a window the model is sure about
+// outweighs several it is not, which is the whole reason to window in the first place.
+// Probabilities would be wrong to sum: softmax is applied per window, so averaging them
+// discards exactly the confidence information the vote is meant to use.
+bool run_voted(GsidHead *h, const char *text, std::vector<float> *scores, int *n_matched) {
+  std::vector<std::string> wins;
+  window(std::string(text), h->chunk_chars, h->chunk_stride, &wins);
+
+  const size_t C = h->labels.size();
+  scores->assign(C, 0.0f);
+  *n_matched = 0;
+  bool any = false;
+
+  std::vector<int64_t> indices;
+  std::vector<float> counts;
+  for (const std::string &w : wins) {
+    const int m = featurise(h, w.c_str(), &indices, &counts);
+    if (m == 0) continue;
+    *n_matched += m;
+    const int64_t shape[1] = {static_cast<int64_t>(indices.size())};
+    Ort::Value t_idx = Ort::Value::CreateTensor<int64_t>(
+        h->mem, indices.data(), indices.size(), shape, 1);
+    Ort::Value t_cnt = Ort::Value::CreateTensor<float>(
+        h->mem, counts.data(), counts.size(), shape, 1);
+    const char *in_names[2] = {h->in0.c_str(), h->in1.c_str()};
+    const char *out_names[1] = {h->out0.c_str()};      // logits
+    Ort::Value ins[2] = {std::move(t_idx), std::move(t_cnt)};
+    auto outs = h->session->Run(Ort::RunOptions{nullptr}, in_names, ins, 2, out_names, 1);
+    const float *logits = outs[0].GetTensorData<float>();
+    for (size_t c = 0; c < C; ++c) (*scores)[c] += logits[c];
+    any = true;
+  }
+  return any;
 }
 
 // Returns probs pointer into `owned` outputs, or nullptr when nothing matched.
@@ -225,6 +394,13 @@ GsidHead *gsid_create(const GsidConfig *cfg, char *err, size_t err_len) {
   std::string e;
 
   if (!h->vocab.load(cfg->ngrams_path, &e)) return fail(e);
+  {
+    // casefold.txt sits beside ngrams.txt; absent means the head was trained cased
+    std::string cf(cfg->ngrams_path);
+    const size_t slash = cf.find_last_of("/\\");
+    cf = (slash == std::string::npos ? std::string() : cf.substr(0, slash + 1)) + "casefold.txt";
+    h->fold.load(cf);
+  }
   if (!read_lines(cfg->labels_path, &h->labels, &e)) return fail(e);
   while (!h->labels.empty() && h->labels.back().empty()) h->labels.pop_back();
   if (h->labels.empty()) return fail("labels.txt is empty");
@@ -238,6 +414,10 @@ GsidHead *gsid_create(const GsidConfig *cfg, char *err, size_t err_len) {
         const std::string key = l.substr(0, sp), val = l.substr(sp + 1);
         if (key == "ngram_min") h->ngram_min = std::atoi(val.c_str());
         else if (key == "ngram_max") h->ngram_max = std::atoi(val.c_str());
+        else if (key == "analyzer") h->char_analyzer = (val.substr(0, 4) == "char");
+        else if (key == "lowercase") h->lowercase = (std::atoi(val.c_str()) != 0);
+        else if (key == "chunk_chars") h->chunk_chars = std::atoi(val.c_str());
+        else if (key == "chunk_stride") h->chunk_stride = std::atoi(val.c_str());
       }
     }
   }
@@ -279,12 +459,26 @@ GsidResult gsid_classify(GsidHead *head, const char *ipa) {
   GsidResult r{-1, 0.0f, 0};
   if (!head || !ipa) return r;
   try {
+    const int n = static_cast<int>(head->labels.size());
+    if (head->chunk_chars > 0) {
+      std::vector<float> scores;
+      int matched = 0;
+      if (!run_voted(head, ipa, &scores, &matched)) return r;
+      r.num_matched = matched;
+      int best = 0;
+      for (int i = 1; i < n; ++i) if (scores[i] > scores[best]) best = i;
+      r.index = best;
+      // softmax over the summed logits, so confidence stays comparable across clip lengths
+      double z = 0.0;
+      for (int i = 0; i < n; ++i) z += std::exp(scores[i] - scores[best]);
+      r.confidence = static_cast<float>(1.0 / z);
+      return r;
+    }
     std::vector<Ort::Value> outs;
     int matched = 0;
     const float *probs = run(head, ipa, &matched, &outs);
     r.num_matched = matched;
     if (!probs) return r;
-    const int n = static_cast<int>(head->labels.size());
     int best = 0;
     for (int i = 1; i < n; ++i) if (probs[i] > probs[best]) best = i;
     r.index = best;
@@ -298,11 +492,24 @@ GsidResult gsid_classify(GsidHead *head, const char *ipa) {
 int gsid_classify_probs(GsidHead *head, const char *ipa, float *probs_out) {
   if (!head || !ipa || !probs_out) return 0;
   try {
+    const int n = static_cast<int>(head->labels.size());
+    if (head->chunk_chars > 0) {
+      std::vector<float> scores;
+      int matched = 0;
+      if (!run_voted(head, ipa, &scores, &matched)) return 0;
+      // softmax the summed logits so callers get a distribution, not raw sums
+      float mx = scores[0];
+      for (int i = 1; i < n; ++i) mx = std::max(mx, scores[i]);
+      double z = 0.0;
+      for (int i = 0; i < n; ++i) z += std::exp(scores[i] - mx);
+      for (int i = 0; i < n; ++i)
+        probs_out[i] = static_cast<float>(std::exp(scores[i] - mx) / z);
+      return n;
+    }
     std::vector<Ort::Value> outs;
     int matched = 0;
     const float *probs = run(head, ipa, &matched, &outs);
     if (!probs) return 0;
-    const int n = static_cast<int>(head->labels.size());
     std::memcpy(probs_out, probs, sizeof(float) * static_cast<size_t>(n));
     return n;
   } catch (const Ort::Exception &) {

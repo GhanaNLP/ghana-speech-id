@@ -75,6 +75,26 @@ def strip_punct(s: str) -> str:
     return " ".join(u for u in s.split() if u not in PUNCT)
 
 
+def chunks(s: str, size: int, stride: int) -> list[str]:
+    """Overlapping windows over a transcript.
+
+    Training on whole transcripts and deploying on short utterances is a mismatch: the head
+    sees a mean of 87 characters in training and has to decide from 25-50 at inference.
+    Cutting training data into windows of the size the app will actually see removes it.
+
+    A window shorter than `size` is kept whole rather than dropped, so short clips still
+    contribute. Windows are the unit of both training and voting.
+    """
+    if size <= 0 or len(s) <= size:
+        return [s]
+    step = max(1, stride)
+    out = [s[i:i + size] for i in range(0, len(s) - size + 1, step)]
+    tail = s[-size:]
+    if out and out[-1] != tail:
+        out.append(tail)
+    return out
+
+
 def truncate(s: str, k: int, analyzer: str = "word") -> str:
     """First k units -- simulates a shorter clip without needing the audio.
 
@@ -85,6 +105,28 @@ def truncate(s: str, k: int, analyzer: str = "word") -> str:
     if k <= 0:
         return s
     return s[:k] if analyzer == "char" else " ".join(s.split()[:k])
+
+
+def vote_predict(vec, clf, docs, size, stride, labels_hint=None, batch=20000):
+    """Classify each window and sum decision values across a document.
+
+    Summing beats counting votes: a window the model is sure about should outweigh several
+    it is not, and counting throws that information away.
+    """
+    classes = list(clf.classes_)
+    flat, owner = [], []
+    for i, d in enumerate(docs):
+        for c in chunks(d, size, stride):
+            flat.append(c); owner.append(i)
+    acc = np.zeros((len(docs), len(classes)), dtype=np.float64)
+    for b0 in range(0, len(flat), batch):
+        sl = slice(b0, b0 + batch)
+        dec = clf.decision_function(vec.transform(flat[sl]))
+        if dec.ndim == 1:
+            dec = np.stack([-dec, dec], 1)
+        for k, row in enumerate(dec):
+            acc[owner[b0 + k]] += row
+    return [classes[i] for i in acc.argmax(axis=1)]
 
 
 def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac: float,
@@ -216,6 +258,17 @@ def main():
                     help="punctuation units are only ~62%% accurate upstream and carry little "
                          "language signal; dropping them is usually the right default")
     ap.add_argument("--min-units", type=int, default=3)
+    ap.add_argument("--chunk-chars", type=int, default=0,
+                    help="cut transcripts into overlapping windows of this many characters. "
+                         "At ~12.3 chars/s, 40 is about 3.3 s -- the point where accuracy "
+                         "saturates. 0 trains on whole transcripts.")
+    ap.add_argument("--chunk-stride", type=int, default=20,
+                    help="window step; half of --chunk-chars gives 50%% overlap")
+    ap.add_argument("--vote", action="store_true",
+                    help="evaluate the way the app will run: chunk each validation "
+                         "transcript, classify every window, and sum the decision values. "
+                         "Soft voting rather than counting wins, since a confident window "
+                         "should outweigh several uncertain ones.")
     ap.add_argument("--analyzer", default="word", choices=["word", "char"],
                     help="word for IPA units from ghana-ipa-asr; char for "
                          "orthography from base omniASR")
@@ -249,6 +302,12 @@ def main():
     data = load(args.data, args.drop_punct, args.min_units, args.split_mode, args.test_frac,
                 args.merge_iso, args.text_col)
     tr = data["train"]
+    if args.chunk_chars:
+        before = len(tr)
+        tr = [(c, lang, dur) for s_, lang, dur in tr
+              for c in chunks(s_, args.chunk_chars, args.chunk_stride)]
+        print(f"chunked train: {before} clips -> {len(tr)} windows of "
+              f"{args.chunk_chars} chars, stride {args.chunk_stride}")
     if args.limit and args.limit < len(tr):
         import random
         random.Random(0).shuffle(tr)
@@ -267,8 +326,11 @@ def main():
     clf.fit(Xtr, ytr)
     print(f"fit in {time.time()-t0:.0f}s", flush=True)
 
-    Xva = vec.transform(Xva_raw)
-    pred = clf.predict(Xva)
+    if args.vote and args.chunk_chars:
+        pred = vote_predict(vec, clf, Xva_raw, args.chunk_chars, args.chunk_stride, labels_hint=None)
+    else:
+        Xva = vec.transform(Xva_raw)
+        pred = clf.predict(Xva)
     acc = accuracy_score(yva, pred); mf1 = f1_score(yva, pred, average="macro")
     print(f"\n== {tag} ==\nvalidation accuracy {acc:.4f}   macro-F1 {mf1:.4f}\n", flush=True)
 
