@@ -18,6 +18,7 @@ import glob
 import io
 import os
 import time
+from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
@@ -36,7 +37,20 @@ PRESETS = {
                   "model.int8.onnx"),
     "1b-int8": (f"{MODELS}/sherpa-onnx-omnilingual-asr-1600-languages-1B-ctc-v2-int8-2026-02-05",
                 "model.int8.onnx"),
+    # ZIPA: Zipformer CTC phone recognition from the same Icefall lineage as sherpa-onnx,
+    # so from_zipformer_ctc loads it directly. 70.7 MB at int8 for the small model, a fifth
+    # of the omniASR int8 we ship, and the exports were published for phones.
+    # fp16 is lossless against fp32 here -- 119/120 transcripts identical, 0.02% of
+    # characters -- while being 1.7x faster and half the size, so fp32 is never the right
+    # choice. int8 is faster still but diverges on 1.39% of characters.
+    "zipa-small": (f"{MODELS}/zipa-small", "model.int8.onnx"),
+    "zipa-small-fp16": (f"{MODELS}/zipa-small", "model.fp16.onnx"),
+    "zipa-small-fp32": (f"{MODELS}/zipa-small", "model.onnx"),
+    "zipa-large": (f"{MODELS}/zipa-large", "model.int8.onnx"),
+    "zipa-large-fp16": (f"{MODELS}/zipa-large", "model.fp16.onnx"),
+    "zipa-large-fp32": (f"{MODELS}/zipa-large", "model.onnx"),
 }
+ZIPFORMER = {k for k in PRESETS if k.startswith("zipa")}
 SR = 16000
 
 
@@ -67,6 +81,12 @@ def main():
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--limit-shards", type=int, default=0)
+    ap.add_argument("--parts-dir", default="",
+                    help="one parquet per shard; lets several processes share the work and "
+                         "lets a crash resume instead of restarting")
+    ap.add_argument("--shard-index", type=int, default=0,
+                    help="this worker handles shards where i %% shard-count == shard-index")
+    ap.add_argument("--shard-count", type=int, default=1)
     ap.add_argument("--window", type=float, default=0.0,
                     help="split clips longer than this and concatenate; 0 disables")
     args = ap.parse_args()
@@ -75,9 +95,10 @@ def main():
 
     d, mf = PRESETS[args.model]
     print(f"loading {args.model} ({mf}) on {args.provider} ...", flush=True)
-    rec = so.OfflineRecognizer.from_omnilingual_asr_ctc(
-        model=f"{d}/{mf}", tokens=f"{d}/tokens.txt",
-        num_threads=args.threads, provider=args.provider)
+    factory = (so.OfflineRecognizer.from_zipformer_ctc if args.model in ZIPFORMER
+               else so.OfflineRecognizer.from_omnilingual_asr_ctc)
+    rec = factory(model=f"{d}/{mf}", tokens=f"{d}/tokens.txt",
+                  num_threads=args.threads, provider=args.provider)
     print("ready", flush=True)
 
     keep = None
@@ -94,13 +115,28 @@ def main():
         print(f"excluded {before - len(shards)} shards under {args.exclude_prefix}*")
     if args.limit_shards:
         shards = shards[: args.limit_shards]
-    print(f"{len(shards)} shards under {args.audio_root}\n", flush=True)
+    if args.shard_count > 1:
+        shards = [f for i, f in enumerate(shards) if i % args.shard_count == args.shard_index]
+        print(f"worker {args.shard_index}/{args.shard_count}: {len(shards)} shards",
+              flush=True)
+    else:
+        print(f"{len(shards)} shards under {args.audio_root}\n", flush=True)
+
+    parts = Path(args.parts_dir) if args.parts_dir else None
+    if parts:
+        parts.mkdir(parents=True, exist_ok=True)
 
     out_id, out_lang, out_txt, out_dur = [], [], [], []
     t_start, done_s = time.time(), 0.0
 
     for si, shard in enumerate(shards, 1):
         cfg = shard.rsplit("/", 2)[-2]
+        part = None
+        if parts:
+            stem = shard.rsplit("/", 1)[-1].replace(".parquet", "")
+            part = parts / f"{cfg}__{stem}.parquet"
+            if part.exists():
+                continue
         have = set(pq.ParquetFile(shard).schema_arrow.names)
         cols = [args.audio_col] + (["id"] if "id" in have else [])
         t = pq.read_table(shard, columns=cols).to_pydict()
@@ -112,7 +148,7 @@ def main():
         sel = [i for i, _id in enumerate(t["id"]) if keep is None or _id in keep]
         if not sel:
             continue
-        t0, shard_s = time.time(), 0.0
+        t0, shard_s, row0 = time.time(), 0.0, len(out_id)
         for b0 in range(0, len(sel), args.batch):
             chunk = sel[b0: b0 + args.batch]
             streams, ids, durs = [], [], []
@@ -133,6 +169,13 @@ def main():
                 out_id.append(_id); out_lang.append(cfg)
                 out_txt.append(s.result.text); out_dur.append(dur)
             shard_s += sum(durs)
+        if part is not None and len(out_id) > row0:
+            pq.write_table(pa.table({
+                "id": pa.array(out_id[row0:], pa.string()),
+                "language": pa.array(out_lang[row0:], pa.string()),
+                "text": pa.array(out_txt[row0:], pa.string()),
+                "duration": pa.array(out_dur[row0:], pa.float64()),
+            }), part, compression="zstd")
         done_s += shard_s
         dt = time.time() - t0
         el = time.time() - t_start
@@ -140,12 +183,15 @@ def main():
               f"{shard_s/max(dt,1e-9):6.0f}x RT | total {len(out_id)} clips "
               f"{done_s/3600:.1f} h in {el/60:.1f} min", flush=True)
 
-    pq.write_table(pa.table({
+    tbl = pa.table({
         "id": pa.array(out_id, pa.string()),
         "language": pa.array(out_lang, pa.string()),
         "text": pa.array(out_txt, pa.string()),
         "duration": pa.array(out_dur, pa.float64()),
-    }), args.out, compression="zstd")
+    })
+    if parts and args.shard_count > 1:
+        print(f"worker {args.shard_index} done; assemble separately once all finish")
+    pq.write_table(tbl, args.out, compression="zstd")
 
     chars = [len(s.replace(" ", "")) for s in out_txt]
     empty = sum(1 for c in chars if c < 3)

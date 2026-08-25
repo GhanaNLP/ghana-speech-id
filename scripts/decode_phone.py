@@ -29,6 +29,8 @@ import torch
 SR = 16000
 W2V = "facebook/wav2vec2-xlsr-53-espeak-cv-ft"
 XEUS = "changelinglab/PhoneticXeus"
+# Allosaurus: 45.7 MB against omniASR int8's 350 MB, wav2vec2's 1.26 GB and XEUS's 2.3 GB.
+# If its accuracy holds it is the only candidate that is obviously phone-deployable.
 
 
 def read_audio(cell):
@@ -96,9 +98,85 @@ class XeusDecoder:
         return out
 
 
+class AlloDecoder:
+    """Allosaurus, fed arrays rather than files.
+
+    Its recognize() asserts a .wav path, but that is only the first of four steps -- read,
+    featurise, acoustic model, decode. Constructing its Audio object directly skips writing
+    362k temporary files. verify_inmemory() checks this against the file path it bypasses,
+    because silently diverging from the library's own entry point is exactly the kind of
+    shortcut that produces a plausible wrong answer.
+
+    lang_id stays "ipa", the universal inventory. Passing a language would tell the phone
+    recogniser the answer the head is supposed to work out.
+    """
+
+    def __init__(self, dev):
+        import numpy as _np
+        from allosaurus.app import read_recognizer
+        from allosaurus.audio import Audio
+        self.m = read_recognizer()
+        self.Audio = Audio
+        self._np = _np
+        self.gpu = dev == "cuda"
+        if self.gpu:
+            try:
+                self.m.config.device_id = 0
+                self.m.am.cuda()
+            except Exception:
+                self.gpu = False
+
+    def _audio(self, w):
+        a = self.Audio()
+        a.set_header(sample_rate=SR, sample_size=len(w), channel_number=1, sample_width=2)
+        # round, do not truncate: astype() truncates toward zero where soundfile rounds to
+        # nearest, and that one-LSB difference is enough to change the decoded phones
+        a.samples = self._np.round(
+            self._np.clip(w, -1, 1) * 32767).astype(self._np.int16)
+        return a
+
+    def __call__(self, waves):
+        out = []
+        for w in waves:
+            feat = self.m.pm.compute(self._audio(w))
+            feats = self._np.expand_dims(feat, 0)
+            flen = self._np.array([feat.shape[0]], dtype=self._np.int32)
+            from allosaurus.am.utils import move_to_tensor
+            tf, tl = move_to_tensor([feats, flen], self.m.config.device_id)
+            with torch.inference_mode():
+                lp = self.m.am(tf, tl)
+            lp = lp.cpu().detach().numpy() if self.m.config.device_id >= 0 else lp.detach().numpy()
+            out.append(self.m.lm.compute(lp[0], "ipa", 1, emit=1.0, timestamp=False))
+        return out
+
+
+def verify_inmemory():
+    """Feeding arrays must give what the library's own file path gives."""
+    import tempfile
+
+    import soundfile as _sf
+    d = AlloDecoder("cpu")
+    f = sorted(glob.glob("/mnt/volume_d2wey28/data/ghana-speech/*/*.parquet"))[0]
+    t = pq.read_table(f, columns=["audio"]).to_pydict()
+    ok = n = 0
+    for cell in t["audio"][:6]:
+        w = read_audio(cell)
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+            _sf.write(tmp.name, w, SR, subtype="PCM_16")
+            ref = d.m.recognize(tmp.name, "ipa")
+        got = d([w])[0]
+        n += 1; ok += (ref == got)
+        if ref != got:
+            print(f"  MISMATCH\n    file: {ref[:70]}\n    mem : {got[:70]}")
+    print(f"in-memory matches the file path on {ok}/{n} clips")
+    return ok == n
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", choices=["w2v", "xeus"], required=True)
+    ap.add_argument("--model", choices=["w2v", "xeus", "allo"], required=True)
+    ap.add_argument("--verify", action="store_true",
+                    help="allo only: check the in-memory path against the file path")
     ap.add_argument("--audio-root", default="/mnt/volume_d2wey28/data/ghana-speech")
     ap.add_argument("--audio-col", default="audio")
     ap.add_argument("--keep-ids", default="")
@@ -112,7 +190,9 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = True
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     t0 = time.time()
-    dec = W2VDecoder(dev) if args.model == "w2v" else XeusDecoder(dev)
+    if args.verify and args.model == "allo":
+        raise SystemExit(0 if verify_inmemory() else 1)
+    dec = {"w2v": W2VDecoder, "xeus": XeusDecoder, "allo": AlloDecoder}[args.model](dev)
     print(f"loaded {args.model} on {dev} in {time.time()-t0:.0f}s", flush=True)
 
     keep = None
