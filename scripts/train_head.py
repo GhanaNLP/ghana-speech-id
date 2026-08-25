@@ -133,7 +133,8 @@ def vote_predict(vec, clf, docs, size, stride, labels_hint=None, batch=20000):
 
 
 def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac: float,
-         merge_iso: bool = False, text_col: str = "ipa"):
+         merge_iso: bool = False, text_col: str = "ipa",
+         join_units: bool = False):
     """Build train/validation.
 
     split_mode:
@@ -170,6 +171,8 @@ def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac
         if ipa is None:
             dropped += 1; continue
         s = strip_punct(ipa) if drop_punct else ipa
+        if join_units:
+            s = s.replace(" ", "")
         if len(s.split()) < min_units:
             dropped += 1; continue
         rows.append((s, mm.get(lang, lang), dur, _id, split))
@@ -275,6 +278,11 @@ def main():
     ap.add_argument("--analyzer", default="word", choices=["word", "char"],
                     help="word for IPA units from ghana-ipa-asr; char for "
                          "orthography from base omniASR")
+    ap.add_argument("--join-units", action="store_true",
+                    help="strip spaces before analysis. char_wb pads every whitespace token, "
+                         "so a transcript of space-separated single phones becomes mostly "
+                         "padding; joining them first gives a continuous string like the one "
+                         "XEUS emits, which is what char n-grams want.")
     ap.add_argument("--no-lowercase", action="store_true",
                     help="char analyzer only. lowercase=True folds Ghanaian capitals "
                          "(Ɛ->ɛ, Ɔ->ɔ, Ŋ->ŋ, Ʋ->ʋ), which is Unicode case folding that "
@@ -303,7 +311,7 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     data = load(args.data, args.drop_punct, args.min_units, args.split_mode, args.test_frac,
-                args.merge_iso, args.text_col)
+                args.merge_iso, args.text_col, args.join_units)
     tr = data["train"]
     if args.chunk_chars:
         before = len(tr)

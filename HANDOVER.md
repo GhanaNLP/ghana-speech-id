@@ -72,6 +72,23 @@ answer, or things simply worth knowing.
 
 ## Known, no decision needed
 
+**The head is trained on fp32 transcripts and served int8.** I chose fp32 for the training
+decode because int8 on CUDA runs at 7x against fp32's 111x, then chose int8 for the demo
+because on CPU that ordering inverts. Both were right individually; I never checked whether
+the same model at different precision produces the same text.
+
+It does not. Only 23.5% of transcripts are byte-identical, though the character-level
+difference is 3.09% -- int8 perturbs transcripts rather than rewriting them. Measured cost
+to the head: 73.42% against 72.15% on the same clips, with 9% of predictions flipping.
+
+About 1.3 points, and worth fixing by decoding the corpus with the quantisation that will
+actually be served. Not worth fixing before the front end is settled, since a change there
+makes the re-decode moot and raises the same question again.
+
+Serving fp32 from Modal would recover it in one line but takes the model from 350 MB to
+1.3 GB and the cold start from 7.9 s to an estimated 11-12 s, which is the wrong trade for
+a demo whose whole design is about not making users wait.
+
 **Rejection is weak.** At 80% of in-set answers retained it rejects about half of
 out-of-set speech. Better than the IPA head's 26.6%, not good enough to rely on. Fixing it
 properly means an explicit "other" class or a background model. Out-of-set predictions are
