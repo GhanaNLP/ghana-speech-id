@@ -46,9 +46,9 @@ def merge_iso(label):
     return "Twi_twi" if iso == "twi" else label
 
 
-def load(path, split=None):
-    t = pq.read_table(path, columns=["id", "language", "emb"]).to_pydict()
-    X = np.asarray(t["emb"], dtype=np.float32)
+def load(path, col="emb"):
+    t = pq.read_table(path, columns=["id", "language", col]).to_pydict()
+    X = np.asarray(t[col], dtype=np.float32)
     y = np.array([merge_iso(l) for l in t["language"]])
     return t["id"], X, y, t["language"]
 
@@ -58,12 +58,15 @@ def main():
     ap.add_argument("--train", required=True)
     ap.add_argument("--eval-full", required=True)
     ap.add_argument("--eval-short", default="", help="embeddings from truncated audio")
+    ap.add_argument("--feature-col", default="emb",
+                    help="emb for pooled hidden states, logits for the 4017 language "
+                         "scores as a feature vector")
     ap.add_argument("--hidden", type=int, default=256)
     ap.add_argument("--test-frac", type=float, default=0.15)
     ap.add_argument("--tag", required=True)
     args = ap.parse_args()
 
-    ids, X, y, raw = load(args.train)
+    ids, X, y, raw = load(args.train, args.feature_col)
     print(f"{len(y)} clips, {X.shape[1]}-dim embeddings, {len(set(y))} classes")
 
     # contiguous holdout by id, the same book-disjoint split the text heads use
@@ -92,7 +95,7 @@ def main():
     for name, path in (("full", args.eval_full), ("1.6s", args.eval_short)):
         if not path:
             continue
-        _, Xe, _, cfgs = load(path)
+        _, Xe, _, cfgs = load(path, args.feature_col)
         gold, keep = [], []
         for i, cfg in enumerate(cfgs):
             iso = CONFIG_TO_ISO.get(cfg, "")
