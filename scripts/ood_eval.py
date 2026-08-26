@@ -102,6 +102,11 @@ def main():
     ap.add_argument("--model", required=True, help="model.joblib from train_head.py")
     ap.add_argument("--decoded", default="data/eval_ipa_gh.parquet",
                     help="output of decode_gpu.py --hf-eval")
+    ap.add_argument("--truncate", default="20,40,80,0",
+                    help="also score with transcripts cut to these character counts; 0 is "
+                         "the whole transcript. 20 chars is about 1.6 s of speech and is "
+                         "the figure variants are selected on -- short audio under real "
+                         "conditions, which is what the app faces.")
     ap.add_argument("--chunk-chars", type=int, default=0,
                     help="window size for voted inference; must match how the head was "
                          "trained")
@@ -126,7 +131,11 @@ def main():
 
     def score(strings):
         strings = [s if args.keep_punct else strip_punct(s) for s in strings]
-        keep = [i for i, s in enumerate(strings) if len(s.split()) >= 3]
+        # match the trainer: continuous phone strings have no whitespace, so counting
+        # tokens would discard every clip
+        char_mode = getattr(vec, "analyzer", "") == "char_wb"
+        keep = [i for i, s in enumerate(strings)
+                if (len(s) if char_mode else len(s.split())) >= 3]
         if not keep:
             return None, None, 0
         docs = [strings[i] for i in keep]
@@ -236,6 +245,29 @@ def main():
     if has_english:
         print("\nNote: this head has an English class, but ghana-speech-eval has no English")
         print("config, so English recall is not measured here.")
+
+    # accuracy against how much transcript the head is given, out of domain
+    tr = [int(x) for x in args.truncate.split(",") if x.strip()]
+    if tr:
+        print("\n== out-of-domain accuracy vs transcript length ==")
+        curve = {}
+        for k in tr:
+            ok = n = 0
+            for cfg, rows in cache.items():
+                iso = rows[0]["iso"] if rows else ""
+                gold = ISO_TO_LABEL.get(iso)
+                if gold is None or iso in OUT_OF_SET:
+                    continue
+                cut = [(r["ipa"] or "")[:k] if k else (r["ipa"] or "") for r in rows]
+                pred, _, m = score(cut)
+                if not m:
+                    continue
+                ok += sum(1 for p in pred if p == gold); n += m
+            if n:
+                curve[str(k) if k else "full"] = round(ok / n, 4)
+                label = f"first {k} chars" if k else "whole transcript"
+                print(f"  {label:20} {ok/n:.4f}  ({ok}/{n})")
+        results["length_curve_ood"] = curve
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(results, indent=2))

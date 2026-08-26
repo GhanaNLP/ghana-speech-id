@@ -134,7 +134,7 @@ def vote_predict(vec, clf, docs, size, stride, labels_hint=None, batch=20000):
 
 def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac: float,
          merge_iso: bool = False, text_col: str = "ipa",
-         join_units: bool = False):
+         join_units: bool = False, analyzer: str = "word"):
     """Build train/validation.
 
     split_mode:
@@ -173,7 +173,12 @@ def load(path: str, drop_punct: bool, min_units: int, split_mode: str, test_frac
         s = strip_punct(ipa) if drop_punct else ipa
         if join_units:
             s = s.replace(" ", "")
-        if len(s.split()) < min_units:
+        # "did the recogniser produce anything usable" -- but the unit differs by front end.
+        # Whitespace tokens are the phonemes for IPA, so counting them is right there; ZIPA
+        # and XEUS emit continuous strings with no spaces at all, where every clip would
+        # count as one token and the whole corpus would be filtered away.
+        n_sym = len(s) if analyzer == "char" else len(s.split())
+        if n_sym < min_units:
             dropped += 1; continue
         rows.append((s, mm.get(lang, lang), dur, _id, split))
     print(f"loaded {len(t['id'])} rows, dropped {dropped} (empty or <{min_units} units)")
@@ -311,7 +316,7 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     data = load(args.data, args.drop_punct, args.min_units, args.split_mode, args.test_frac,
-                args.merge_iso, args.text_col, args.join_units)
+                args.merge_iso, args.text_col, args.join_units, args.analyzer)
     tr = data["train"]
     if args.chunk_chars:
         before = len(tr)
