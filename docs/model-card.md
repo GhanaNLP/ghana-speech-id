@@ -69,18 +69,19 @@ model turns audio into text, and this one says which language the text is in.
 audio ──[sherpa-onnx + omniASR CTC]──▶ transcript ──[this]──▶ language
 ```
 
-Two variants live in this repository, differing only in which front end produced the
-transcripts they were trained on.
+**One head ships**, in `300m/`, built on the omniASR CTC 300M front end. `GhanaSpeechId.load()`
+finds it with no argument — there is nothing to choose.
 
-| variant | front end | in-domain | out-of-domain | size |
+| | in-domain | out-of-domain | very short input (~0.8 s) | size |
 |---|---|---|---|---|
-| **`300m/`** | omniASR CTC 300M | 95.30% | **77.6%** | 8.2 MB |
-| `1b/` | omniASR CTC 1B v2 | 95.15% | 77.4% | 8.2 MB |
+| **`300m/`** (ships) | **95.30%** | **77.6%** | 72.1% | 8.2 MB |
+| `1b/` | 95.15% | 77.4% | **74.2%** | 8.2 MB |
 
-**Use `300m` unless your utterances are very short.** The two are level from about three
-seconds of speech onward, and the 300M front end is a third the size and the only one
-sherpa-onnx decodes at a useful rate. Below that the 1B is better: at ~0.8 s of speech it
-scores 74.2% against 72.1%.
+A 1B-front-end variant was built and measured and is kept in `1b/` for reference, but it is
+not the default and the library no longer offers the choice. It ties out of domain, loses
+in domain, and its one advantage — input under a second — is unreachable now that the
+guidance is five seconds minimum. It also needs a front end three times the size that
+sherpa-onnx cannot decode at a useful rate.
 
 ## How much audio to give it
 
@@ -119,7 +120,7 @@ from ghana_speech_id import GhanaSpeechId
 
 rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(
     model="omniasr-300m/model.int8.onnx", tokens="omniasr-300m/tokens.txt")
-lid = GhanaSpeechId.load("ghananlpcommunity/ghana-speech-id")   # variant="300m"
+lid = GhanaSpeechId.load("ghananlpcommunity/ghana-speech-id")
 
 s = rec.create_stream()
 s.accept_waveform(16000, wav)

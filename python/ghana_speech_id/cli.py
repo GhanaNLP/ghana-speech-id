@@ -2,34 +2,30 @@
 
     ghana-speech-id "obiara na enyi nyɛden dɛ ɔbɔbɔ no nkenyan"
     ghana-speech-id --file transcripts.txt --top 3
-    ghana-speech-id --variant 1b < transcripts.txt
+    ghana-speech-id --top 3 < transcripts.txt
 """
 from __future__ import annotations
 
 import argparse
 import sys
 
-from ghana_speech_id.model import DEFAULT_REPO, DEFAULT_VARIANT, GhanaSpeechId
+from ghana_speech_id.model import DEFAULT_REPO, GhanaSpeechId
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="ghana-speech-id",
-        description="Identify the language of an IPA phoneme string.")
+        description="Identify the language of a speech transcript.")
     ap.add_argument("text", nargs="*", help="transcript; omit to read stdin")
     ap.add_argument("--model", default=DEFAULT_REPO,
                     help="local model directory or Hugging Face repo id")
-    ap.add_argument("--variant", default=DEFAULT_VARIANT, choices=["300m", "1b"],
-                    help="which front-end the head was built on. 300m is the default and "
-                         "measured slightly more accurate than 1b as well as smaller")
     ap.add_argument("--file", help="read one phoneme string per line from this file")
     ap.add_argument("--top", type=int, default=1, help="show the N most likely languages")
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--fp16", action="store_true", help="prefer the half-precision head")
     args = ap.parse_args(argv)
 
-    lid = GhanaSpeechId.load(args.model, variant=args.variant, fp16=args.fp16,
-                             num_threads=args.threads)
+    lid = GhanaSpeechId.load(args.model, fp16=args.fp16, num_threads=args.threads)
 
     if args.text:
         lines = [" ".join(args.text)]

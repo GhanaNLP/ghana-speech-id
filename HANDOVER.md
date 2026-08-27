@@ -94,11 +94,12 @@ out-of-set speech. Better than the IPA head's 26.6%, not good enough to rely on.
 properly means an explicit "other" class or a background model. Out-of-set predictions are
 at least coherent: Ga goes to Dangme, Ahanta to Nzema -- each language's nearest relative.
 
-**The 1B is resolved, not open.** Built, published, characterised: it ties the 300M out of
-domain, trails slightly in-domain, and wins by about two points below three seconds of
-speech. sherpa-onnx ships it int8-only and int8 has no CUDA kernels, so bulk decoding needs
-fairseq2 (283x) rather than sherpa (4-5x). On-device single-clip inference through sherpa
-int8 is fine.
+**The 1B is resolved, and now also retired from the API.** Built, published, characterised:
+it ties the 300M out of domain (77.4 against 77.6), loses in domain, and wins only below a
+second of speech (74.2 against 72.1) -- which the five-second floor puts out of reach. As of
+0.2.0 `load()` takes no `variant` and always loads `300m/`; the 1B files stay in the Hub repo
+for reference. `variant=` is accepted with a DeprecationWarning so 0.1.x code keeps working,
+and should be deleted at 1.0.
 
 ## Not done
 

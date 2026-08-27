@@ -29,12 +29,12 @@ holding out whole books.
 skipping its `bible_*` configs because those are the training domain. Five unrelated
 domains, 13,963 scored clips.
 
-| variant | features | in-domain | out-of-domain | size |
-|---|---|---|---|---|
-| **300m** | 50k | 95.30% | **77.6%** | **8.2 MB** |
-| 300m | 200k | **95.44%** | 77.7% | 32.8 MB |
-| 1b | 50k | 95.15% | 77.4% | 8.2 MB |
-| 1b | 200k | 95.31% | 77.8% | 32.8 MB |
+| features | in-domain | out-of-domain | size |
+|---|---|---|---|
+| **50k** (ships) | 95.30% | **77.6%** | **8.2 MB** |
+| 200k | 95.44% | 77.7% | 32.8 MB |
+
+Four times the size for a tenth of a point, so 50k ships.
 
 Out-of-domain by domain, for the shipped 300m/50k head:
 
@@ -42,17 +42,20 @@ Out-of-domain by domain, for the shipped 300m/50k head:
 |---|---|---|---|---|
 | 42% | 76% | 81% | 92% | 89% |
 
-## Which variant
+## One model
 
-**300m unless your utterances are very short.** The two are level from about three seconds
-of speech onward, and the 300m is a third the size and the only one sherpa-onnx can decode
-with at a useful rate. But the 1b is meaningfully better on very short input:
+There is one head, built on the omniASR CTC 300M front end, and nothing to choose. A 1B
+variant was built, published and measured, and it did not earn a decision:
 
-| input | ≈ audio | 300m | 1b |
+| | in-domain | out-of-domain | very short input (~0.8 s) |
 |---|---|---|---|
-| 10 chars | ~0.8 s | 72.1% | **74.2%** |
-| 40 chars | ~3.3 s | 94.6% | 94.6% |
-| full | — | 95.3% | 95.2% |
+| **300M** | **95.30%** | **77.6%** | 72.1% |
+| 1B | 95.15% | 77.4% | **74.2%** |
+
+It ties out of domain, loses in domain, and its one real advantage is input under a second
+— which the five-second floor puts out of reach. It also needs a front end three times the
+size that sherpa-onnx cannot decode with at a useful rate. The files remain in the Hub repo
+under `1b/` for anyone who wants them, but the library no longer asks.
 
 ## How much audio to give it
 
@@ -110,7 +113,7 @@ from ghana_speech_id import GhanaSpeechId
 
 rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(
     model="omniasr-300m/model.int8.onnx", tokens="omniasr-300m/tokens.txt")
-lid = GhanaSpeechId.load()                    # variant="300m" by default
+lid = GhanaSpeechId.load()
 
 s = rec.create_stream()
 s.accept_waveform(16000, wav)
@@ -144,7 +147,7 @@ unknown rather than naming whichever language scored least badly.
 
 ```sh
 ghana-speech-id "obiara na enyi nyɛden dɛ ɔbɔbɔ no nkenyan"
-ghana-speech-id --variant 1b --top 3 < transcripts.txt
+ghana-speech-id --top 3 < transcripts.txt
 ```
 
 ### Android and iOS
@@ -278,7 +281,7 @@ See `scripts/`, and [HANDOVER.md](HANDOVER.md) for what is settled and what is o
 | `ood_eval.py` | the out-of-domain evaluation |
 | `eval_duration_curve.sh` | accuracy against real audio duration |
 | `select_variants.py` | pick which variants ship, on measured accuracy |
-| `publish_hf.py` | publish both variants to the Hub |
+| `publish_hf.py` | publish to the Hub |
 
 Quantisation has to follow the device, and getting it wrong is expensive:
 

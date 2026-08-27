@@ -20,7 +20,11 @@ from pathlib import Path
 import numpy as np
 
 DEFAULT_REPO = "ghananlpcommunity/ghana-speech-id"
-DEFAULT_VARIANT = "300m"
+# The only head that ships. A 1B-front-end variant was built and measured: it tied the 300M
+# out of domain (77.4 against 77.6) and lost in domain, its one advantage being very short
+# input -- 74.2% against 72.1% at under a second. That advantage is unreachable now the
+# guidance is five seconds minimum, so it bought a decision and nothing else.
+MODEL_DIR = "300m"
 
 
 @dataclass(frozen=True)
@@ -54,7 +58,7 @@ class GhanaSpeechId:
 
         rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(
             model="omniasr-300m/model.int8.onnx", tokens="omniasr-300m/tokens.txt")
-        lid = GhanaSpeechId.load()          # variant="300m" by default
+        lid = GhanaSpeechId.load()
 
         s = rec.create_stream(); s.accept_waveform(16000, wav); rec.decode_stream(s)
         print(lid.classify(s.result.text))
@@ -125,25 +129,32 @@ class GhanaSpeechId:
         cls,
         model: str | os.PathLike = DEFAULT_REPO,
         *,
-        variant: str = DEFAULT_VARIANT,
         fp16: bool = False,
         num_threads: int = 1,
+        variant: str | None = None,
     ) -> GhanaSpeechId:
         """Load from a local directory or pull one from the Hugging Face Hub.
 
         :param model: a directory holding ``head.onnx``/``head.fp16.onnx``, ``ngrams.txt``,
             ``labels.txt`` and ``head_config.txt``, or a Hub repo id.
-        :param variant: which front-end the head was built on -- ``"300m"`` or ``"1b"``.
-            Both live in the same Hub repo. 300m is the default: smaller, faster on device,
-            and within a point of the 1b in accuracy.
         :param fp16: prefer the half-precision head, which is half the size on disk.
+        :param variant: deprecated and ignored except to keep older code working. There is
+            one head now; see :data:`MODEL_DIR`.
         """
+        if variant is not None:
+            import warnings
+            warnings.warn(
+                "variant= is deprecated and will be removed: there is one head now, and "
+                "load() finds it without being told. Drop the argument.",
+                DeprecationWarning, stacklevel=2)
+        want = variant or MODEL_DIR
+
         path = Path(model)
         if not path.is_dir():
             from huggingface_hub import snapshot_download
 
             # Patterns are matched against the full relative path, so a bare "ngrams.txt"
-            # never matches "300m/ngrams.txt" and the variant directories come down empty.
+            # never matches "300m/ngrams.txt" and the model directory comes down empty.
             path = Path(
                 snapshot_download(
                     str(model),
@@ -151,15 +162,14 @@ class GhanaSpeechId:
                 )
             )
 
-        # variant subdirectory in the Hub repo; a local export may sit at the root or
-        # under onnx/
-        for cand in (path / variant, path, path / "onnx"):
+        # subdirectory in the Hub repo; a local export may sit at the root or under onnx/
+        for cand in (path / want, path, path / "onnx"):
             if (cand / "ngrams.txt").exists():
                 root = cand
                 break
         else:
             raise FileNotFoundError(
-                f"no ngrams.txt under {path}/{variant}, {path} or {path}/onnx")
+                f"no ngrams.txt under {path}/{want}, {path} or {path}/onnx")
         names = ["head.fp16.onnx", "head.onnx"] if fp16 else ["head.onnx", "head.fp16.onnx"]
         onnx = next((root / n for n in names if (root / n).exists()), None)
         if onnx is None:
