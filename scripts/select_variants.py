@@ -73,7 +73,7 @@ def main():
     if base is None:
         print("omniASR 300M baseline missing; cannot apply the rule"); return
 
-    print(f"criterion: out-of-domain accuracy on the first 20 characters (~1.6 s)\n")
+    print("criterion: out-of-domain accuracy on the first 20 characters (~1.6 s)\n")
     print(f"baseline: {base['label']}  {base['ood']:.4f} at 20 chars  "
           f"({base['overall']:.4f} whole, {base['in']:.4f} in-domain)\n")
     hdr = (f"{'variant':22} {'MB':>7} {'xRT':>6} {'OOD@20':>8} {'OODall':>8} "
@@ -95,7 +95,7 @@ def main():
               f"{r['in']:8.4f}  {verdict}")
 
     # baseline competes on the frontier too: if something smaller beats it, it is dominated
-    pool = survivors + [base]
+    pool = [*survivors, base]
     frontier = []
     for r in pool:
         dominated = any(o is not r and o["mb"] <= r["mb"] and o["ood"] >= r["ood"]

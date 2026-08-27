@@ -13,7 +13,6 @@ model needs, the container is up. Nothing runs while nobody is recording.
 from __future__ import annotations
 
 import io
-import json
 import os
 import time
 
@@ -233,7 +232,6 @@ class Identifier:
         speech and throws away the rest, so a long recording costs no more to classify than
         a short one -- and scores better, because accuracy climbs steeply with speech.
         """
-        import shutil
         import subprocess
         import tempfile
 

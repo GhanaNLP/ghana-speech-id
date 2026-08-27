@@ -26,10 +26,6 @@ import pyarrow.parquet as pq
 import soundfile as sf
 
 MODELS = "/mnt/volume_d2wey28/projects/ghana-speech-id/models"
-# int8 on CUDA runs at 7x -- slower than CPU's 17x -- because quantised operators have no
-# CUDA kernels and onnxruntime places them on CPU node by node, paying a device transfer at
-# every boundary. The fp32 build does 111x. Use fp32 whenever decoding on GPU; the int8
-# builds are for on-device inference, where they are the right choice.
 PRESETS = {
     # int8 on CUDA runs at 7x -- slower than CPU's 17x -- because quantised operators have
     # no CUDA kernels and onnxruntime places them on CPU node by node. fp32 does 111x on
@@ -41,6 +37,7 @@ PRESETS = {
                   "model.int8.onnx"),
 }
 ZIPFORMER: set[str] = set()   # kept so callers need no change; no zipformer front end ships
+SR = 16000                    # omniASR sample rate; anything else is resampled to it
 
 
 def decode_cell(cell):
