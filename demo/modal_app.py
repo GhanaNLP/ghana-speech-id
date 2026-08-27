@@ -14,19 +14,23 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import time
 
+import fastapi
 import modal
 
 MODELS = "/models"
 ASR_DIR = f"{MODELS}/omniasr-300m"
 HEAD_DIR = f"{MODELS}/head"
+VAD_MODEL = f"{MODELS}/silero_vad.onnx"
 
 # Both models are baked into the image rather than downloaded at run time: a cold start
 # should be container boot plus model load, not a 350 MB download.
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("curl", "bzip2")          # not present in debian_slim
+    .apt_install("ffmpeg")
     .pip_install("sherpa-onnx==1.13.6", "ghana-speech-id==0.1.1", "fastapi[standard]",
                  "soundfile>=0.12", "numpy<2", "huggingface_hub>=0.30")
     .run_commands(
@@ -37,6 +41,9 @@ image = (
         "sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12.tar.bz2 "
         f"&& tar xjf a.tar.bz2 && rm a.tar.bz2 "
         f"&& mv sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12 {ASR_DIR}",
+        # 0.6 MB, and it decides whether a recording is worth transcribing at all
+        f"cd {MODELS} && curl -sL -O "
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
     )
     .run_commands(
         f"python -c \"from huggingface_hub import snapshot_download; "
@@ -47,11 +54,24 @@ image = (
 
 app = modal.App("ghana-speech-id", image=image)
 
-# How much speech the head needs, measured: 72% at ~0.8 s, 89% at ~1.6 s, 95% at ~3.3 s.
-MIN_SECONDS = 3.0
+# Measured on real audio rather than truncated transcripts, which flattered short clips by
+# about six points: three seconds of actual speech scores 0.506 out of domain against 0.776
+# for whole clips averaging 9.7 s. Short audio does not merely yield less text, it yields
+# worse text -- 19.7 characters at 4.6% empty against 80 characters at 0.9%.
+#
+# So the service asks for five seconds and checks that they are mostly speech. A recording
+# that is half silence carries half the evidence its duration suggests.
+MIN_SECONDS = 5.0
 MAX_SECONDS = 20.0
+MIN_SPEECH_RATIO = 0.80
+MIN_SPEECH_SECONDS = 3.5
 
-
+# An uploaded file supplies far more audio than someone will record by hand, and accuracy
+# climbs steeply with speech, so decode a generous amount and let the VAD discard the
+# silence between utterances rather than transcribing it.
+UPLOAD_DECODE_SECONDS = 180   # how much of the file to decode before trimming
+URL_SPEECH_TARGET = 20.0      # how much speech to keep once silence is dropped
+MAX_UPLOAD_BYTES = 80 << 20
 @app.cls(
     cpu=2,
     # Stay up briefly between requests so a user recording several clips pays one cold
@@ -73,7 +93,32 @@ class Identifier:
             num_threads=2,
         )
         self.lid = GhanaSpeechId.load(HEAD_DIR, num_threads=2)
-        print(f"loaded in {time.time() - t0:.1f}s, {len(self.lid.languages)} languages")
+
+        vc = sherpa_onnx.VadModelConfig()
+        vc.silero_vad.model = VAD_MODEL
+        vc.silero_vad.threshold = 0.5
+        vc.silero_vad.min_silence_duration = 0.25
+        vc.silero_vad.min_speech_duration = 0.20
+        vc.sample_rate = 16000
+        self.vad_config = vc
+        print(f"loaded in {time.time() - t0:.1f}s, {len(self.lid.languages)} languages, "
+              f"VAD ready")
+
+    def speech_seconds(self, audio, sr):
+        """Seconds of detected speech. A fresh detector per call: it is stateful, and
+        leaking state between requests would make results depend on call order."""
+        import sherpa_onnx
+        vad = sherpa_onnx.VoiceActivityDetector(self.vad_config, buffer_size_in_seconds=30)
+        step = 512
+        for i in range(0, len(audio), step):
+            vad.accept_waveform(audio[i:i + step])
+        vad.flush()
+        total = 0.0
+        while not vad.empty():
+            seg = vad.front
+            total += len(seg.samples) / sr
+            vad.pop()
+        return total
 
     def _run(self, wav_bytes: bytes) -> dict:
         import numpy as np
@@ -89,9 +134,22 @@ class Identifier:
             seconds = MAX_SECONDS
 
         rms = float(np.sqrt(np.mean(audio ** 2))) if len(audio) else 0.0
-        if seconds < 0.5 or rms < 0.005:
-            return {"ok": False, "reason": "too quiet or too short",
+        if rms < 0.005:
+            return {"ok": False, "reason": "too quiet",
                     "seconds": round(seconds, 2), "rms": round(rms, 4)}
+        if seconds < MIN_SECONDS:
+            return {"ok": False, "reason": "too short",
+                    "seconds": round(seconds, 2), "need_seconds": MIN_SECONDS}
+
+        speech = self.speech_seconds(audio, sr)
+        ratio = speech / max(seconds, 1e-6)
+        if speech < MIN_SPEECH_SECONDS or ratio < MIN_SPEECH_RATIO:
+            return {"ok": False, "reason": "not enough speech",
+                    "seconds": round(seconds, 2),
+                    "speech_seconds": round(speech, 2),
+                    "speech_ratio": round(ratio, 3),
+                    "need_ratio": MIN_SPEECH_RATIO,
+                    "need_speech_seconds": MIN_SPEECH_SECONDS}
 
         s = self.rec.create_stream()
         s.accept_waveform(sr, audio)
@@ -117,9 +175,10 @@ class Identifier:
             "top": [{"language": k, "score": round(v, 4)} for k, v in top],
             "transcript": transcript,
             "seconds": round(seconds, 2),
+            "speech_seconds": round(speech, 2),
+            "speech_ratio": round(ratio, 3),
             "chars": len(transcript),
-            # below this the head is measurably unreliable; the client warns rather than
-            # hiding the answer
+            # measured: about 20 characters is 0.51 out of domain, 40 is 0.64, 80 is 0.76
             "short": len(transcript) < 40,
             "timing_ms": {"asr": round(t_asr * 1000), "lid": round(t_lid * 1000)},
         }
@@ -139,9 +198,98 @@ class Identifier:
         except Exception as e:  # a bad upload should not take the container down
             return {"ok": False, "reason": f"{type(e).__name__}: {e}"}
 
+    def speech_only(self, audio, sr, target):
+        """Concatenate detected speech up to `target` seconds, dropping the gaps.
+
+        Broadcast and interview audio is full of pauses, music and silence. Transcribing
+        those wastes the budget: what the head needs is speech, and it gets steadily better
+        with more of it.
+        """
+        import numpy as np
+        import sherpa_onnx
+        vad = sherpa_onnx.VoiceActivityDetector(self.vad_config, buffer_size_in_seconds=120)
+        step = 512
+        for i in range(0, len(audio), step):
+            vad.accept_waveform(audio[i:i + step])
+        vad.flush()
+        parts, total = [], 0.0
+        while not vad.empty():
+            seg = vad.front
+            samples = np.asarray(seg.samples, dtype=np.float32)
+            parts.append(samples)
+            total += len(samples) / sr
+            vad.pop()
+            if total >= target:
+                break
+        return (np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)), total
+
+    @modal.fastapi_endpoint(method="POST", docs=True)
+    async def identify_file(self, request: fastapi.Request):
+        """Accepts a raw audio or video file body and returns the predicted language.
+
+        Decoding happens here rather than in the browser on purpose: a page can only decode
+        the containers its own engine ships, which excludes most of what people actually
+        have lying around, while ffmpeg reads effectively all of it. The VAD then keeps the
+        speech and throws away the rest, so a long recording costs no more to classify than
+        a short one -- and scores better, because accuracy climbs steeply with speech.
+        """
+        import shutil
+        import subprocess
+        import tempfile
+
+        import soundfile as sf
+
+        t0 = time.time()
+        raw = await request.body()
+        if not raw:
+            return {"ok": False, "reason": "no file supplied"}
+        if len(raw) > MAX_UPLOAD_BYTES:
+            return {"ok": False, "reason": "file too large",
+                    "limit_mb": MAX_UPLOAD_BYTES // (1 << 20)}
+
+        with tempfile.TemporaryDirectory() as td:
+            src, out = f"{td}/upload", f"{td}/a.wav"
+            with open(src, "wb") as fh:
+                fh.write(raw)
+            # -t caps the decode: past the speech target there is nothing left to gain, and
+            # an hour-long file would otherwise be decoded in full before the VAD trimmed it.
+            r = subprocess.run(
+                ["ffmpeg", "-nostdin", "-v", "error", "-y",
+                 "-t", str(UPLOAD_DECODE_SECONDS), "-i", src,
+                 "-vn", "-ar", "16000", "-ac", "1", out],
+                capture_output=True, text=True, timeout=180)
+            if not os.path.exists(out):
+                err = (r.stderr or "").strip().splitlines()
+                return {"ok": False, "reason": "could not read that file",
+                        "detail": err[-1][:200] if err else "no audio track"}
+            audio, sr = sf.read(out, dtype="float32", always_2d=False)
+
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        duration = len(audio) / sr
+        t_decode = time.time() - t0
+
+        speech, secs = self.speech_only(audio, sr, URL_SPEECH_TARGET)
+        if secs < MIN_SPEECH_SECONDS:
+            return {"ok": False, "reason": "not enough speech",
+                    "fetched_seconds": round(duration, 1),
+                    "speech_seconds": round(secs, 2),
+                    "need_speech_seconds": MIN_SPEECH_SECONDS}
+
+        buf = io.BytesIO()
+        sf.write(buf, speech, sr, format="WAV", subtype="PCM_16")
+        res = self._run(buf.getvalue())
+        if isinstance(res, dict):
+            res["source"] = "file"
+            res["fetched_seconds"] = round(duration, 1)
+            res["decode_ms"] = round(t_decode * 1000)
+        return res
+
     @modal.fastapi_endpoint(method="GET", docs=True)
     def warm(self):
         """Cheap endpoint the browser hits on record-start, so the container is already up
         by the time the user has finished speaking."""
         return {"ok": True, "languages": len(self.lid.languages),
-                "min_seconds": MIN_SECONDS, "max_seconds": MAX_SECONDS}
+                "min_seconds": MIN_SECONDS, "max_seconds": MAX_SECONDS,
+                "min_speech_ratio": MIN_SPEECH_RATIO,
+                "min_speech_seconds": MIN_SPEECH_SECONDS}

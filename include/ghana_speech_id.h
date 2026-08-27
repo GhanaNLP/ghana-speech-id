@@ -9,6 +9,11 @@
  * speech-to-IPA stage is a separate sherpa-onnx call that this library does not wrap,
  * so you can use the head on its own wherever the phonemes already exist.
  *
+ * Accuracy rises steeply with how much speech the transcript came from. Measured out of
+ * domain on real audio: three seconds scores about 0.51, whole clips averaging 9.7 seconds
+ * about 0.78. Feed it five seconds or more, and check the audio is mostly speech before
+ * transcribing -- silence contributes nothing and inflates the apparent duration.
+ *
  * Thread safety: a GsidHead is safe for concurrent gsid_classify* calls. Creation and
  * destruction are not; do those from one thread.
  *

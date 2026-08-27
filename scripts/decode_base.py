@@ -31,27 +31,16 @@ MODELS = "/mnt/volume_d2wey28/projects/ghana-speech-id/models"
 # every boundary. The fp32 build does 111x. Use fp32 whenever decoding on GPU; the int8
 # builds are for on-device inference, where they are the right choice.
 PRESETS = {
+    # int8 on CUDA runs at 7x -- slower than CPU's 17x -- because quantised operators have
+    # no CUDA kernels and onnxruntime places them on CPU node by node. fp32 does 111x on
+    # CUDA. Decode with the precision that will be served: training on fp32 and serving
+    # int8 cost the head 1.3 points and flipped 9% of predictions.
     "300m": (f"{MODELS}/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-2025-11-12",
              "model.onnx"),
     "300m-int8": (f"{MODELS}/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12",
                   "model.int8.onnx"),
-    "1b-int8": (f"{MODELS}/sherpa-onnx-omnilingual-asr-1600-languages-1B-ctc-v2-int8-2026-02-05",
-                "model.int8.onnx"),
-    # ZIPA: Zipformer CTC phone recognition from the same Icefall lineage as sherpa-onnx,
-    # so from_zipformer_ctc loads it directly. 70.7 MB at int8 for the small model, a fifth
-    # of the omniASR int8 we ship, and the exports were published for phones.
-    # fp16 is lossless against fp32 here -- 119/120 transcripts identical, 0.02% of
-    # characters -- while being 1.7x faster and half the size, so fp32 is never the right
-    # choice. int8 is faster still but diverges on 1.39% of characters.
-    "zipa-small": (f"{MODELS}/zipa-small", "model.int8.onnx"),
-    "zipa-small-fp16": (f"{MODELS}/zipa-small", "model.fp16.onnx"),
-    "zipa-small-fp32": (f"{MODELS}/zipa-small", "model.onnx"),
-    "zipa-large": (f"{MODELS}/zipa-large", "model.int8.onnx"),
-    "zipa-large-fp16": (f"{MODELS}/zipa-large", "model.fp16.onnx"),
-    "zipa-large-fp32": (f"{MODELS}/zipa-large", "model.onnx"),
 }
-ZIPFORMER = {k for k in PRESETS if k.startswith("zipa")}
-SR = 16000
+ZIPFORMER: set[str] = set()   # kept so callers need no change; no zipformer front end ships
 
 
 def decode_cell(cell):

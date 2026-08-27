@@ -70,6 +70,7 @@ def main():
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--shard-index", type=int, default=0)
     ap.add_argument("--shard-count", type=int, default=1)
+    ap.add_argument("--exclude-prefix", default="")
     ap.add_argument("--limit-shards", type=int, default=0)
     args = ap.parse_args()
 
@@ -89,6 +90,9 @@ def main():
         keep = set(pq.read_table(args.keep_ids, columns=["id"])["id"].to_pylist())
 
     shards = sorted(glob.glob(f"{args.audio_root}/*/*.parquet"))
+    if args.exclude_prefix:
+        shards = [f for f in shards
+                  if not f.rsplit("/", 2)[-2].startswith(args.exclude_prefix)]
     if args.limit_shards:
         shards = shards[: args.limit_shards]
     if args.shard_count > 1:
@@ -109,7 +113,14 @@ def main():
             part = parts / f"{cfg}__{stem}.parquet"
             if part.exists():
                 continue
-        t = pq.read_table(shard, columns=["id", args.audio_col]).to_pydict()
+        # ghana-speech-eval carries no id column; synthesise a stable one. The same fix
+        # was made in decode_base.py and should have been carried here at the time.
+        have = set(pq.ParquetFile(shard).schema_arrow.names)
+        cols = [args.audio_col] + (["id"] if "id" in have else [])
+        t = pq.read_table(shard, columns=cols).to_pydict()
+        if "id" not in t:
+            stem = shard.rsplit("/", 1)[-1].replace(".parquet", "")
+            t["id"] = [f"{cfg}_{stem}_{i:06d}" for i in range(len(t[args.audio_col]))]
         sel = [i for i, _id in enumerate(t["id"]) if keep is None or _id in keep]
         if not sel:
             continue

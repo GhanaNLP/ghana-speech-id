@@ -54,6 +54,26 @@ with at a useful rate. But the 1b is meaningfully better on very short input:
 | 40 chars | ~3.3 s | 94.6% | 94.6% |
 | full | — | 95.3% | 95.2% |
 
+## How much audio to give it
+
+**Accuracy rises steeply with the amount of speech**, and the effect is larger than any
+other choice in this system. Measured out of domain on real audio — not on truncated
+transcripts, which flatter short input by about six points because the recogniser still had
+the whole clip:
+
+| audio | accuracy |
+|---|---|
+| 3 seconds | 0.51 |
+| whole clips (mean 9.7 s) | **0.78** |
+
+Short audio does not merely produce less text, it produces worse text: three seconds yields
+a mean of 19.7 characters at 4.6% empty, against 80 characters at 0.9% for whole clips.
+
+So: **ask for at least five seconds, and check that most of it is speech.** A recording that
+is half silence carries half the evidence its duration suggests. The reference service runs
+[silero VAD](https://github.com/snakers4/silero-vad) (0.6 MB, bundled with sherpa-onnx) and
+rejects anything below 80% speech before transcribing.
+
 ## Speed and footprint
 
 CPU only. There is no GPU path in the inference library and none is wanted: the head is a
@@ -62,19 +82,13 @@ arithmetic. Both runtimes pin the CPU execution provider.
 
 Single thread, measured end to end including tokenisation:
 
-| runtime | per classification | throughput | resident | load |
-|---|---|---|---|---|
-| **C++** (Xeon 8558) | **0.064 ms** | 15,700/s | **36 MB** | — |
-| Python (Ryzen 5 4500U) | 0.09–0.20 ms | 5,500–10,000/s | 90 MB | 0.66 s cached |
+| runtime | per classification | throughput | resident |
+|---|---|---|---|
+| **C++** (Xeon 8558) | **0.064 ms** | 15,700/s | **36 MB** |
+| Python (Ryzen 5 4500U) | 0.09–0.20 ms | 5,500–10,000/s | 90 MB |
 
-Latency scales mildly with transcript length — 0.091 ms at 26 characters, 0.197 ms at 72 —
-because the work is proportional to the number of n-grams extracted.
-
-For context, the head is roughly four orders of magnitude cheaper than the speech
-recognition in front of it. On any device that can run the ASR at all, language
-identification is free.
-
-Model files are 8.2 MB for the head plus 0.3 MB of vocabulary.
+The head is roughly four orders of magnitude cheaper than the speech recognition in front of
+it. On any device that can run the ASR, language identification is free.
 
 ## Using it
 
@@ -163,6 +177,24 @@ Inference classifies the whole transcript in one pass. Voting across windows was
 implemented and measured: −0.6 out of domain, −0.09 in-domain, and it compresses the margins
 that out-of-set rejection depends on. The code remains, defaulted off.
 
+## Front ends that were tried and rejected
+
+Six alternatives to omniASR orthography were measured on the same evaluation. All lost, and
+the pattern is consistent enough to be worth stating: **discrete symbols carry more usable
+language identity than pooled acoustic vectors, and the gap widens as audio gets shorter.**
+
+| front end | why it lost |
+|---|---|
+| ZIPA phones (Zipformer CTC) | 0.34 against 0.57 at 1.6 s. A universal phone inventory is *designed* to be language-invariant, which is the information language ID needs |
+| MMS-LID-4017 zero shot | 0.27 at 1.6 s. Collapses on short audio far worse than text does |
+| MMS features + our own head | ~0.22 at 1.6 s. The representation degrades, not just its classifier |
+| omniASR encoder embeddings | **0.976 in-domain, 0.108 out of domain.** Learned narrators, not languages — the corpus has roughly one voice per language, which is why this project classifies text at all |
+| wav2vec2-XLSR eSpeak | eSpeak's inventory emits English `ɹ` and no labiovelars, so it flattens distinctions these languages depend on |
+| Qwen3-ASR encoder | covers ~11 languages, none African |
+
+Audio chunking — training on 3 s windows to match inference — was also measured and came out
+**neutral** once training-data volume was controlled for.
+
 ## Limitations
 
 **Closed set.** The head always names one of its 41 classes. Ga, Ahanta and Ikposo are not
@@ -213,12 +245,14 @@ See `scripts/`, and [HANDOVER.md](HANDOVER.md) for what is settled and what is o
 | `setup_lean.sh` | venv and dependencies |
 | `pull_ipa.py` | corpus text without downloading the audio |
 | `decode_base.py` | transcribe with a base omniASR model via sherpa-onnx |
-| `decode_fairseq2.py` | same via fairseq2, for the 1B which sherpa ships int8-only |
+| `decode_chunked.py` | transcribe fixed-length windows, for the chunking experiment |
 | `build_base_corpus.py` | assemble the training corpus |
 | `train_head.py` | train and evaluate one configuration |
 | `export_onnx.py` | export to ONNX, check parity against sklearn |
 | `cpp_parity.py` | check the C++ and Python runtimes against the trainer |
 | `ood_eval.py` | the out-of-domain evaluation |
+| `eval_duration_curve.sh` | accuracy against real audio duration |
+| `select_variants.py` | pick which variants ship, on measured accuracy |
 | `publish_hf.py` | publish both variants to the Hub |
 
 Quantisation has to follow the device, and getting it wrong is expensive:

@@ -102,7 +102,7 @@ def main():
     ap.add_argument("--model", required=True, help="model.joblib from train_head.py")
     ap.add_argument("--decoded", default="data/eval_ipa_gh.parquet",
                     help="output of decode_gpu.py --hf-eval")
-    ap.add_argument("--truncate", default="20,40,80,0",
+    ap.add_argument("--truncate", default="20,40,60,80,0",
                     help="also score with transcripts cut to these character counts; 0 is "
                          "the whole transcript. 20 chars is about 1.6 s of speech and is "
                          "the figure variants are selected on -- short audio under real "

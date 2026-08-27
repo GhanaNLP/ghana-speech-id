@@ -35,7 +35,9 @@ class Prediction:
     margin: float
     """Top-1 minus top-2. A usable confidence signal regardless of head type."""
     matched_ngrams: int
-    """How many n-grams were found in the vocabulary."""
+    """How many n-grams were found in the vocabulary. A rough proxy for how much the head
+    had to work with -- accuracy climbs steeply with it, so a low count is a reason to
+    treat the answer as provisional and ask for more speech."""
 
     def __str__(self) -> str:  # pragma: no cover - convenience only
         return f"{self.language} ({self.confidence:.3f})"
@@ -58,6 +60,17 @@ class GhanaSpeechId:
         print(lid.classify(s.result.text))
 
     Pass the recogniser's output unmodified.
+
+    **Accuracy rises with the amount of speech, steeply.** Measured out of domain on real
+    audio, not on truncated transcripts:
+
+        3 seconds    0.51
+        5 seconds    see the model card
+        whole clips  0.78   (averaging 9.7 s)
+
+    Give it five seconds or more, and make sure most of that is speech rather than silence:
+    a recording that is half pauses carries half the evidence its length suggests. The
+    reference service applies a voice-activity check for this reason.
     """
 
     def __init__(

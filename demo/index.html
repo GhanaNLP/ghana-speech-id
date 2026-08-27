@@ -34,6 +34,23 @@
   #rec[data-state="recording"] { background: var(--bad); color: #2b0b0b; }
   #rec:disabled { opacity: .55; cursor: default; }
 
+  /* uploading is the primary input: most people have a recording to hand sooner than
+     they have five clean seconds of their own speech to perform */
+  .drop {
+    display: block; width: 100%; padding: 26px 18px; text-align: center; cursor: pointer;
+    border: 1px dashed var(--line); border-radius: 10px; background: var(--bg);
+    color: var(--dim); font-size: .92rem; transition: border-color .15s, color .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--text); }
+  .drop b { display: block; color: var(--text); font-weight: 600; font-size: 1rem;
+            margin-bottom: 4px; }
+  .drop.busy { opacity: .6; cursor: default; }
+  #file { display: none; }
+  .or { display: flex; align-items: center; gap: 12px; margin: 20px 0 16px;
+        color: var(--dim); font-size: .78rem; text-transform: uppercase;
+        letter-spacing: .08em; }
+  .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
   /* level meter doubles as the "is my mic working" signal and the too-quiet warning */
   .meter { height: 8px; background: var(--line); border-radius: 99px; margin: 16px 0 6px;
            overflow: hidden; }
@@ -68,17 +85,29 @@
 <body>
 <div class="wrap">
   <h1>Ghana Speech ID</h1>
-  <p class="sub">Speak, and it tells you which of 41 Ghanaian and West African languages
-     you spoke.</p>
+  <p class="sub">Upload something spoken, or record yourself, and it tells you which of
+     41 Ghanaian and West African languages it is.</p>
 
   <div class="card">
+    <label class="drop" id="drop" for="file">
+      <b>Upload audio or video</b>
+      or drag a file here
+    </label>
+    <input id="file" type="file" accept="audio/*,video/*">
+    <div class="hint" id="urlhint">Any common format. It throws away the silence and reads
+      up to twenty seconds of actual speech — usually far more than someone records by
+      hand, which is why this is the more accurate route.</div>
+
+    <div class="or">or record</div>
+
     <button id="rec">Hold on — checking microphone…</button>
 
     <div class="meter" id="meterBox"><i id="meter"></i></div>
     <div class="timer"><span id="elapsed">0.0s</span><span id="target">aim for 5 seconds</span></div>
 
-    <div class="hint" id="hint">Tap to record. Say a full sentence — a few words is not
-      enough to tell these languages apart.</div>
+    <div class="hint" id="hint">Tap to record and speak for at least five seconds. Longer is
+      more accurate — these languages are closely related and a few words rarely separate
+      them.</div>
 
     <div id="out">
       <div class="lang" id="lang"></div>
@@ -92,17 +121,20 @@
   <footer>
     <a href="https://github.com/GhanaNLP/ghana-speech-id">github</a> ·
     <a href="https://huggingface.co/ghananlpcommunity/ghana-speech-id">model</a> ·
-    41 languages, no English · runs on CPU
+    41 languages, no English · runs on CPU · longer speech is more accurate
   </footer>
 </div>
 
 <script>
 const WARM = "https://ghana-nlp-2--ghana-speech-id-identifier-warm.modal.run";
 const IDENTIFY = "https://ghana-nlp-2--ghana-speech-id-identifier-identify.modal.run";
+const IDENTIFY_FILE = "https://ghana-nlp-2--ghana-speech-id-identifier-identify-file.modal.run";
 
-// Measured accuracy against how much speech the model gets: 72% at ~0.8s, 89% at ~1.6s,
-// 95% at ~3.3s. Below MIN the answer is not worth showing; TARGET is where it plateaus.
-const MIN_SEC = 3.0, TARGET_SEC = 5.0, MAX_SEC = 20.0;
+// Measured out of domain on real audio, not on truncated transcripts: three seconds scores
+// 0.51 and whole clips averaging 9.7 s score 0.78. Accuracy climbs steeply with speech, so
+// the page asks for five seconds and the server rejects anything below that or below 80%
+// speech. Longer is genuinely better; the button keeps saying so past the minimum.
+const MIN_SEC = 5.0, TARGET_SEC = 8.0, MAX_SEC = 20.0;
 const SR = 16000;
 const QUIET_RMS = 0.012;      // below this the recogniser tends to return nothing
 
@@ -153,7 +185,7 @@ function tick() {
   if (secs < MIN_SEC) {
     el("target").textContent = "keep going — " + (MIN_SEC - secs).toFixed(1) + "s more";
   } else if (secs < TARGET_SEC) {
-    el("target").textContent = "good — a little longer is better";
+    el("target").textContent = "enough to try — longer is more accurate";
   } else {
     el("target").textContent = "plenty — tap to stop";
   }
@@ -212,8 +244,8 @@ async function stop() {
   btn.dataset.state = ""; btn.textContent = "Record";
 
   if (secs < MIN_SEC) {
-    setHint("Only " + secs.toFixed(1) + "s — too short to be reliable. Try a full sentence.",
-            "warn");
+    setHint("Only " + secs.toFixed(1) + "s. At least " + MIN_SEC + "s is needed — accuracy "
+            + "roughly halves on very short clips.", "warn");
     return;
   }
   if (peakSeen < QUIET_RMS) {
@@ -246,29 +278,100 @@ async function stop() {
   btn.disabled = false;
 }
 
-function show(d) {
+function show(d, sink) {
+  const say = sink || setHint;
   if (!d || !d.ok) {
     const why = d && d.reason ? d.reason : "something went wrong";
-    setHint(why === "no speech recognised"
-      ? "No speech recognised. Speak a little louder, or closer to the microphone."
-      : "Could not identify: " + why, "warn");
+    let msg;
+    if (why === "not enough speech") {
+      const total = d.seconds != null ? d.seconds : d.fetched_seconds;
+      msg = "Only " + (d.speech_seconds || 0).toFixed(1) + "s of the "
+          + (total || 0).toFixed(1) + "s was speech"
+          + (d.speech_ratio != null ? " (" + Math.round(d.speech_ratio * 100) + "%)" : "")
+          + ". " + (sink ? "Try a file with more continuous talking."
+                         : "Speak continuously — pauses and silence do not help.");
+    } else if (why === "could not read that file") {
+      msg = "Could not read that file — it may have no audio track.";
+    } else if (why === "file too large") {
+      msg = "That file is too large. Upload a shorter clip.";
+    } else if (why === "no file supplied") {
+      msg = "No file was received. Try choosing it again.";
+    } else if (why === "too short") {
+      msg = "Too short. Record at least " + (d.need_seconds || MIN_SEC) + " seconds.";
+    } else if (why === "no speech recognised") {
+      msg = "No speech recognised. Speak louder, or closer to the microphone.";
+    } else if (why === "too quiet") {
+      msg = "Too quiet. Move closer to the microphone and try again.";
+    } else {
+      msg = "Could not identify: " + why;
+    }
+    say(msg, "warn");
     return;
   }
-  setHint("Tap to record again.");
+  say(sink ? "Upload another file to try again." : "Tap to record again.");
   el("lang").textContent = displayName(d.language);
   el("conf").textContent = Math.round(d.confidence * 100) + "% confident · "
-    + d.seconds + "s of audio · " + d.chars + " characters recognised";
+    + d.seconds + "s audio, " + (d.speech_seconds != null ? d.speech_seconds + "s speech · " : "")
+    + d.chars + " characters recognised";
   el("bars").innerHTML = d.top.map(t =>
     '<div class="bar"><span>' + displayName(t.language) + '</span>'
     + '<span class="t"><i style="width:' + Math.round(t.score * 100) + '%"></i></span>'
     + '<span class="n">' + Math.round(t.score * 100) + '%</span></div>').join("");
   el("tx").innerHTML = "<b>Heard:</b> " + d.transcript;
   el("note").textContent = d.short
-    ? "Short sample — accuracy is noticeably lower below about 40 characters. "
-      + "A longer sentence will be more reliable."
+    ? "Short sample. Accuracy climbs steeply with speech — a longer recording will be "
+      + "noticeably more reliable."
     : "";
   el("out").style.display = "block";
 }
+
+// ------------------------------------------------------------------ file upload
+const drop = el("drop"), fileInput = el("file");
+const MAX_MB = 80;
+
+function setUrlHint(text, cls = "") {
+  el("urlhint").className = "hint " + cls;
+  el("urlhint").textContent = text;
+}
+
+async function identifyFile(f) {
+  if (!f) return;
+  if (f.size > MAX_MB * 1024 * 1024) {
+    setUrlHint("That file is over " + MAX_MB + " MB. Trim it, or upload a shorter clip.", "warn");
+    return;
+  }
+  warm();
+  drop.classList.add("busy");
+  el("out").style.display = "none";
+  // Decoding and transcribing takes a few seconds, and a silent page reads as a hang.
+  setUrlHint("Reading " + f.name + "…");
+  try {
+    const resp = await fetch(IDENTIFY_FILE, {
+      method: "POST", mode: "cors",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: f,
+    });
+    show(await resp.json(), setUrlHint);
+  } catch (e) {
+    setUrlHint("Could not reach the service. Try again in a moment.", "bad");
+  }
+  drop.classList.remove("busy");
+  fileInput.value = "";          // so re-picking the same file fires change again
+}
+
+fileInput.onchange = () => identifyFile(fileInput.files[0]);
+drop.onmouseenter = warm;
+
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.add("over"); warm();
+}));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.remove("over");
+}));
+drop.addEventListener("drop", e => {
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) identifyFile(f);
+});
 
 btn.onclick = () => recording ? stop() : start();
 
