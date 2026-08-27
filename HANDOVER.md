@@ -94,12 +94,13 @@ out-of-set speech. Better than the IPA head's 26.6%, not good enough to rely on.
 properly means an explicit "other" class or a background model. Out-of-set predictions are
 at least coherent: Ga goes to Dangme, Ahanta to Nzema -- each language's nearest relative.
 
-**The 1B is resolved, and now also retired from the API.** Built, published, characterised:
-it ties the 300M out of domain (77.4 against 77.6), loses in domain, and wins only below a
-second of speech (74.2 against 72.1) -- which the five-second floor puts out of reach. As of
-0.2.0 `load()` takes no `variant` and always loads `300m/`; the 1B files stay in the Hub repo
-for reference. `variant=` is accepted with a DeprecationWarning so 0.1.x code keeps working,
-and should be deleted at 1.0.
+**The 1B is resolved and retired.** Built, published, characterised: it tied the 300M out
+of domain (77.4 against 77.6), lost in domain, and won only below a second of speech (74.2
+against 72.1) -- which the five-second floor puts out of reach. As of 0.2.0 `load()` takes
+no `variant`, and the `1b/` files have been deleted from the Hub repo, so nothing resolves
+there any more. `variant=` is still accepted, warned on and ignored, so 0.1.x callers keep
+working; delete it at 1.0. Its metrics survive in `metrics.json` history and in the
+rejected-front-ends table in the README -- do not re-run this experiment.
 
 ## Not done
 

@@ -20,10 +20,10 @@ from pathlib import Path
 import numpy as np
 
 DEFAULT_REPO = "ghananlpcommunity/ghana-speech-id"
-# The only head that ships. A 1B-front-end variant was built and measured: it tied the 300M
-# out of domain (77.4 against 77.6) and lost in domain, its one advantage being very short
-# input -- 74.2% against 72.1% at under a second. That advantage is unreachable now the
-# guidance is five seconds minimum, so it bought a decision and nothing else.
+# The only head, built on the omniASR CTC 300M front end. A 1B variant was built, measured
+# and retired: it tied out of domain (77.4 against 77.6), lost in domain, and won only below
+# a second of speech -- unreachable once the guidance became five seconds. It bought a
+# decision and nothing else, so it is gone from the Hub repo and from this API.
 MODEL_DIR = "300m"
 
 
@@ -138,16 +138,17 @@ class GhanaSpeechId:
         :param model: a directory holding ``head.onnx``/``head.fp16.onnx``, ``ngrams.txt``,
             ``labels.txt`` and ``head_config.txt``, or a Hub repo id.
         :param fp16: prefer the half-precision head, which is half the size on disk.
-        :param variant: deprecated and ignored except to keep older code working. There is
-            one head now; see :data:`MODEL_DIR`.
+        :param variant: deprecated and ignored. There is one head; see :data:`MODEL_DIR`.
         """
         if variant is not None:
             import warnings
             warnings.warn(
-                "variant= is deprecated and will be removed: there is one head now, and "
-                "load() finds it without being told. Drop the argument.",
+                "variant= is deprecated and ignored: there is one head now, and load() "
+                "finds it without being told. Drop the argument.",
                 DeprecationWarning, stacklevel=2)
-        want = variant or MODEL_DIR
+        # Ignored rather than honoured -- the 1B head has been removed from the Hub repo,
+        # so passing variant="1b" would otherwise fail to resolve rather than fall back.
+        want = MODEL_DIR
 
         path = Path(model)
         if not path.is_dir():

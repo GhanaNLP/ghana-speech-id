@@ -1,13 +1,15 @@
-"""Publish both variants to one Hub repo, laid out like AfriSpeech/afrispeech-gender-id.
+"""Publish the head to one Hub repo, laid out like AfriSpeech/afrispeech-gender-id.
 
 `config.json` at the repo root is what makes the Hub register downloads -- without it the
-model shows no count however many people pull it. It also declares which variants exist, so
-the library can resolve `variant="300m"` without hard-coding paths.
+model shows no count however many people pull it. It also carries the feature contract the
+runtimes have to reproduce exactly.
 
-    config.json          download trigger, variant index, feature contract
-    metrics.json         in-domain and out-of-domain numbers per variant
+    config.json          download trigger, feature contract
+    metrics.json         in-domain and out-of-domain numbers
     300m/  head.onnx  ngrams.txt  labels.txt  head_config.txt  casefold.txt
-    1b/    same
+
+One head ships. A 1B-front-end variant was built, measured and retired -- it tied out of
+domain and lost in domain -- so publishing must not recreate `1b/`.
 """
 from __future__ import annotations
 
@@ -17,19 +19,13 @@ import shutil
 from pathlib import Path
 
 REPO = "ghananlpcommunity/ghana-speech-id"
+MAIN = "300m"          # the only head; see the module docstring
 VARIANTS = {
     "300m": {
         "run": "final_300m_mf50000",
         "front_end": "omniASR CTC 300M (sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc)",
-        "recommended": True,
-        "note": "default: smaller, faster, and measured slightly more accurate than the 1B",
-    },
-    "1b": {
-        "run": "final_1b_mf50000",
-        "front_end": "omniASR CTC 1B v2 (sherpa-onnx-omnilingual-asr-1600-languages-1B-ctc-v2)",
-        "recommended": False,
-        "note": "larger front end; no accuracy advantage here, and int8-only so bulk "
-                "decoding needs fairseq2 rather than sherpa-onnx",
+        "note": "the head: small, fast on CPU, and the only front end sherpa-onnx decodes "
+                "at a useful rate",
     },
 }
 FILES = ("head.onnx", "head.fp16.onnx", "ngrams.txt", "labels.txt",
@@ -86,8 +82,6 @@ def main():
         variants_meta[name] = {
             "path": name,
             "front_end": spec["front_end"],
-            "recommended": spec["recommended"],
-            "note": spec["note"],
             "n_features": m["n_features"],
             "held_out_accuracy": round(m["accuracy"], 4),
             "held_out_macro_f1": round(m["macro_f1"], 4),
@@ -116,8 +110,11 @@ def main():
     cfg = json.loads(Path("hf_card/config.json").read_text(encoding="utf-8"))
     cfg["num_labels"] = len(labels)
     cfg["labels"] = labels
-    cfg["variants"] = variants_meta
-    cfg["default_variant"] = "300m"
+    # One head, so config.json carries it flat. Writing a "variants" index back would
+    # resurrect a choice that was deliberately removed.
+    cfg.pop("variants", None)
+    cfg.pop("default_variant", None)
+    cfg["model"] = variants_meta[MAIN]
     cfg["architecture"] = ("base omniASR CTC orthography (frozen) + linear head over "
                            "character n-grams")
     cfg["input"] = ("orthographic text from a base omniASR CTC model; the head is trained "
@@ -148,7 +145,7 @@ def main():
 
     from huggingface_hub import HfApi
     HfApi().upload_folder(folder_path=str(stage), repo_id=args.repo, repo_type="model",
-                          commit_message="Both variants, base omniASR front ends")
+                          commit_message="Head on the base omniASR 300M front end")
     print(f"\nuploaded to https://huggingface.co/{args.repo}")
 
 

@@ -69,18 +69,41 @@ model turns audio into text, and this one says which language the text is in.
 audio ──[sherpa-onnx + omniASR CTC]──▶ transcript ──[this]──▶ language
 ```
 
-Two variants live in this repository, differing only in which front end produced the
-transcripts they were trained on.
+One head, in `300m/`, built on the omniASR CTC 300M front end.
+`GhanaSpeechId.load()` finds it with no argument — there is nothing to choose.
 
-| variant | front end | in-domain | out-of-domain | size |
+| in-domain | out-of-domain | size |
+|---|---|---|
+| **95.30%** | **77.6%** | **8.2 MB** |
+
+## How much audio to give it
+
+**Five seconds minimum, ten for the best result.** This matters more than the choice of
+variant, the feature count, or anything else you can tune. Measured on
+[ghana-speech-eval](https://huggingface.co/datasets/ghananlpcommunity/ghana-speech-eval)
+without its `bible_*` configs — the out-of-domain set described under Evaluation below — on
+real audio of each length, not on truncated transcripts, which flatter short input by about
+six points because the recogniser still had the whole clip:
+
+| audio | accuracy | clips scored | mean characters | empty transcripts |
 |---|---|---|---|---|
-| **`300m/`** | omniASR CTC 300M | 95.30% | **77.6%** | 8.2 MB |
-| `1b/` | omniASR CTC 1B v2 | 95.15% | 77.4% | 8.2 MB |
+| 3 s | 0.506 | 57,840 | 19.7 | 4.6% |
+| **5 s** | **0.657** | 32,816 | 33.4 | 0.7% |
+| **7 s** | **0.759** | 20,439 | 47.7 | 0.1% |
+| whole clips (mean 9.7 s) | **0.777** | 13,963 | 80.0 | 0.9% |
 
-**Use `300m` unless your utterances are very short.** The two are level from about three
-seconds of speech onward, and the 300M front end is a third the size and the only one
-sherpa-onnx decodes at a useful rate. Below that the 1B is better: at ~0.8 s of speech it
-scores 74.2% against 72.1%.
+Five seconds is a floor, not a target — it buys 0.66, well short of what the model can do.
+The curve then flattens: seven seconds is within two points of whole clips averaging 9.7 s,
+so **ten seconds is where the returns run out**.
+
+Short audio does not simply produce less text, it produces worse text. Three seconds yields
+19.7 characters on average and 4.6% of clips come back empty, against 80 characters and 0.9%
+for whole clips — the recogniser needs context and starves without it.
+
+**Check that most of it is speech.** A recording that is half silence carries half the
+evidence its duration suggests. The reference service runs
+[silero VAD](https://github.com/snakers4/silero-vad) and rejects anything below 80% speech
+before transcribing.
 
 ## Usage
 
@@ -90,7 +113,7 @@ from ghana_speech_id import GhanaSpeechId
 
 rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(
     model="omniasr-300m/model.int8.onnx", tokens="omniasr-300m/tokens.txt")
-lid = GhanaSpeechId.load("ghananlpcommunity/ghana-speech-id")   # variant="300m"
+lid = GhanaSpeechId.load("ghananlpcommunity/ghana-speech-id")
 
 s = rec.create_stream()
 s.accept_waveform(16000, wav)
@@ -101,13 +124,6 @@ print(lid.classify(s.result.text))
 On device there is no Python: sherpa-onnx produces the transcript and the head runs in
 onnxruntime through a C API, with Kotlin and Swift bindings. See
 [the repository](https://github.com/GhanaNLP/ghana-speech-id).
-
-## Speed
-
-CPU only; there is no GPU path and none is needed. Single thread, including tokenisation:
-**0.064 ms per classification in C++** (36 MB resident) and 0.09–0.20 ms in Python. That is
-roughly four orders of magnitude cheaper than the speech recognition in front of it, so on
-any device that can run the ASR, language identification is free.
 
 ## Evaluation
 

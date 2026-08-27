@@ -1,20 +1,21 @@
 {
-  "architecture": "ghana-ipa-asr CTC phonemes (frozen) + linear head over phoneme n-grams",
+  "architecture": "base omniASR CTC orthography (frozen) + linear head over character n-grams",
   "task": "spoken-language-identification",
-  "phoneme_model_repo": "ghananlpcommunity/ghana-speech-phoneme-asr",
-  "input": "space-separated IPA units from ghana-ipa-asr; units are atomic (k͡p, kʰ, t͡ʃ)",
+  "input": "orthographic text from a base omniASR CTC model; the head is trained on 40-character windows and classifies whole transcripts",
   "features": {
-    "type": "tf-idf over phoneme n-grams",
+    "type": "tf-idf over char_wb n-grams",
     "ngram_range": [
       1,
       5
     ],
     "sublinear_tf": true,
     "norm": "l2",
-    "punctuation": "dropped"
+    "lowercase": true,
+    "tokenisation": "char_wb: each word padded with one space either side, n-grams taken within the padded word over CODEPOINTS not bytes",
+    "casefold": "casefold.txt maps every uppercase form occurring in the vocabulary; Unicode folding (Ɛ->ɛ) that std::tolower cannot do"
   },
   "onnx": {
-    "file": "onnx/head.onnx",
+    "file": "300m/head.onnx",
     "opset": 13,
     "notes": "core operators only; no com.microsoft contrib ops, so mobile onnxruntime works",
     "inputs": {
@@ -26,8 +27,59 @@
       "probs": "float32[C]"
     }
   },
-  "num_labels": null,
-  "labels": null,
-  "recommended_min_units": 40,
-  "notes": "accuracy saturates at ~40 phoneme units (~4 s); gate on unit count, not a timer"
+  "num_labels": 41,
+  "labels": [
+    "Anyin_any",
+    "Avatime_avn",
+    "Bassar_Ntcham_bud",
+    "Bimoba_bim",
+    "Birifor_Southern_biv",
+    "Bissa_bib",
+    "Buli_bwu",
+    "Chumburung_ncu",
+    "Dagaare_dga",
+    "Dagbani_dag",
+    "Dangme_ada",
+    "Deg_mzw",
+    "Ewe_ewe",
+    "Fante_fat",
+    "Fulfulde_Maasina_ffm",
+    "Gikyode_acd",
+    "Gonja_gjn",
+    "Hausa_hau",
+    "Kabiye_kbp",
+    "Kasem_xsm",
+    "Konkomba_xon",
+    "Konni_kma",
+    "Kusaal_kus",
+    "Lelemi_lef",
+    "Mampruli_maw",
+    "Nawuri_naw",
+    "Ninkare_gur",
+    "Nkonya_nko",
+    "Ntrubo_ntr",
+    "Nzema_nzi",
+    "Paasaal_sig",
+    "Sehwi_sfw",
+    "Sekpele_lip",
+    "Selee_snw",
+    "Sisaala_Tumulung_sil",
+    "Siwu_akp",
+    "Tampulma_tpm",
+    "Tem_kdh",
+    "Tuwuli_bov",
+    "Twi_twi",
+    "Vagla_vag"
+  ],
+  "notes": "give it five seconds of speech minimum and ten for the best result: measured out of domain, 3 s scores 0.506, 5 s 0.657, 7 s 0.759 and whole clips averaging 9.7 s 0.777. check most of the audio is speech first",
+  "model": {
+    "path": "300m",
+    "front_end": "omniASR CTC 300M (sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc)",
+    "n_features": 50000,
+    "held_out_accuracy": 0.953,
+    "held_out_macro_f1": 0.9542,
+    "out_of_domain_accuracy": 0.7755
+  },
+  "recommended_min_seconds": 5,
+  "recommended_seconds": 10
 }

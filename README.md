@@ -44,18 +44,9 @@ Out-of-domain by domain, for the shipped 300m/50k head:
 
 ## One model
 
-There is one head, built on the omniASR CTC 300M front end, and nothing to choose. A 1B
-variant was built, published and measured, and it did not earn a decision:
-
-| | in-domain | out-of-domain | very short input (~0.8 s) |
-|---|---|---|---|
-| **300M** | **95.30%** | **77.6%** | 72.1% |
-| 1B | 95.15% | 77.4% | **74.2%** |
-
-It ties out of domain, loses in domain, and its one real advantage is input under a second
-— which the five-second floor puts out of reach. It also needs a front end three times the
-size that sherpa-onnx cannot decode with at a useful rate. The files remain in the Hub repo
-under `1b/` for anyone who wants them, but the library no longer asks.
+One head, built on the omniASR CTC 300M front end. `GhanaSpeechId.load()` finds it with no
+argument and there is nothing to choose — no variant, no size ladder, no decision to get
+wrong.
 
 ## How much audio to give it
 
@@ -192,7 +183,7 @@ that out-of-set rejection depends on. The code remains, defaulted off.
 
 ## Front ends that were tried and rejected
 
-Six alternatives to omniASR orthography were measured on the same evaluation. All lost, and
+Seven alternatives to the shipped front end were measured on the same evaluation. All lost, and
 the pattern is consistent enough to be worth stating: **discrete symbols carry more usable
 language identity than pooled acoustic vectors, and the gap widens as audio gets shorter.**
 
@@ -204,6 +195,7 @@ language identity than pooled acoustic vectors, and the gap widens as audio gets
 | omniASR encoder embeddings | **0.976 in-domain, 0.108 out of domain.** Learned narrators, not languages — the corpus has roughly one voice per language, which is why this project classifies text at all |
 | wav2vec2-XLSR eSpeak | eSpeak's inventory emits English `ɹ` and no labiovelars, so it flattens distinctions these languages depend on |
 | Qwen3-ASR encoder | covers ~11 languages, none African |
+| omniASR CTC 1B front end | tied out of domain (77.4 against 77.6) and lost in domain. Won only below a second of speech, which the five-second floor puts out of reach, and needs a front end three times the size that sherpa-onnx cannot decode at a useful rate |
 
 Audio chunking — training on 3 s windows to match inference — was also measured and came out
 **neutral** once training-data volume was controlled for.
