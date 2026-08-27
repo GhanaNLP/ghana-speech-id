@@ -127,11 +127,11 @@
     <button id="rec">Hold on — checking microphone…</button>
 
     <div class="meter" id="meterBox"><i id="meter"></i></div>
-    <div class="timer"><span id="elapsed">0.0s</span><span id="target">aim for 5 seconds</span></div>
+    <div class="timer"><span id="elapsed">0.0s</span><span id="target">aim for 10 seconds</span></div>
 
-    <div class="hint" id="hint">Tap to record and speak for at least five seconds. Longer is
-      more accurate — these languages are closely related and a few words rarely separate
-      them.</div>
+    <div class="hint" id="hint">Tap to record and speak for ten seconds if you can. Five is
+      the minimum and scores 0.66; ten reaches 0.78, and past that there is little left to
+      gain. These languages are closely related and a few words rarely separate them.</div>
 
     <div id="out">
       <div class="lang" id="lang"></div>
@@ -157,11 +157,11 @@ const WARM = "https://ghana-nlp-2--ghana-speech-id-identifier-warm.modal.run";
 const IDENTIFY = "https://ghana-nlp-2--ghana-speech-id-identifier-identify.modal.run";
 const IDENTIFY_FILE = "https://ghana-nlp-2--ghana-speech-id-identifier-identify-file.modal.run";
 
-// Measured out of domain on real audio, not on truncated transcripts: three seconds scores
-// 0.51 and whole clips averaging 9.7 s score 0.78. Accuracy climbs steeply with speech, so
-// the page asks for five seconds and the server rejects anything below that or below 80%
-// speech. Longer is genuinely better; the button keeps saying so past the minimum.
-const MIN_SEC = 5.0, TARGET_SEC = 8.0, MAX_SEC = 20.0;
+// Measured out of domain on real audio of each length, not on truncated transcripts:
+// 3 s 0.506, 5 s 0.657, 7 s 0.759, whole clips averaging 9.7 s 0.777. So five seconds is
+// the floor the server enforces (with at least 80% speech), and ten is the target past
+// which the curve is flat -- the timer nags for the difference between the two.
+const MIN_SEC = 5.0, TARGET_SEC = 10.0, MAX_SEC = 20.0;
 const SR = 16000;
 const QUIET_RMS = 0.012;      // below this the recogniser tends to return nothing
 
@@ -212,7 +212,7 @@ function tick() {
   if (secs < MIN_SEC) {
     el("target").textContent = "keep going — " + (MIN_SEC - secs).toFixed(1) + "s more";
   } else if (secs < TARGET_SEC) {
-    el("target").textContent = "enough to try — longer is more accurate";
+    el("target").textContent = "enough to try — keep going to 10s for the best result";
   } else {
     el("target").textContent = "plenty — tap to stop";
   }

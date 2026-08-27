@@ -56,21 +56,31 @@ with at a useful rate. But the 1b is meaningfully better on very short input:
 
 ## How much audio to give it
 
-**Accuracy rises steeply with the amount of speech**, and the effect is larger than any
-other choice in this system. Measured out of domain on real audio — not on truncated
-transcripts, which flatter short input by about six points because the recogniser still had
-the whole clip:
+**Give it five seconds at minimum, and ten if you can.** Accuracy rises steeply with the
+amount of speech, and the effect is larger than any other choice in this system.
 
-| audio | accuracy |
-|---|---|
-| 3 seconds | 0.51 |
-| whole clips (mean 9.7 s) | **0.78** |
+Measured out of domain on real audio of each length — not on truncated transcripts, which
+flatter short input by around six points because the recogniser still had the whole clip to
+work from:
+
+| audio | accuracy | clips scored | mean characters | empty |
+|---|---|---|---|---|
+| 3 s | 0.506 | 57,840 | 19.7 | 4.6% |
+| **5 s** | **0.657** | 32,816 | 33.4 | 0.7% |
+| **7 s** | **0.759** | 20,439 | 47.7 | 0.1% |
+| whole clips (mean 9.7 s) | **0.777** | 13,963 | 80.0 | 0.9% |
+
+Two things follow. Five seconds is a floor, not a target: it buys 0.66, well short of what
+the model can do. And the curve is nearly flat past about seven seconds — 7 s is within two
+points of whole clips averaging 9.7 s — so **ten seconds is where the returns run out**.
+Beyond that you are paying for recognition that buys nothing.
 
 Short audio does not merely produce less text, it produces worse text: three seconds yields
-a mean of 19.7 characters at 4.6% empty, against 80 characters at 0.9% for whole clips.
+a mean of 19.7 characters at 4.6% empty, against 80 characters at 0.9% for whole clips. The
+recogniser needs context, and starves without it.
 
-So: **ask for at least five seconds, and check that most of it is speech.** A recording that
-is half silence carries half the evidence its duration suggests. The reference service runs
+**Check that most of it is speech.** A recording that is half silence carries half the
+evidence its duration suggests. The reference service runs
 [silero VAD](https://github.com/snakers4/silero-vad) (0.6 MB, bundled with sherpa-onnx) and
 rejects anything below 80% speech before transcribing.
 

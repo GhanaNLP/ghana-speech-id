@@ -62,15 +62,17 @@ class GhanaSpeechId:
     Pass the recogniser's output unmodified.
 
     **Accuracy rises with the amount of speech, steeply.** Measured out of domain on real
-    audio, not on truncated transcripts:
+    audio of each length, not on truncated transcripts:
 
-        3 seconds    0.51
-        5 seconds    see the model card
-        whole clips  0.78   (averaging 9.7 s)
+        3 seconds    0.506
+        5 seconds    0.657
+        7 seconds    0.759
+        whole clips  0.777   (averaging 9.7 s)
 
-    Give it five seconds or more, and make sure most of that is speech rather than silence:
-    a recording that is half pauses carries half the evidence its length suggests. The
-    reference service applies a voice-activity check for this reason.
+    So five seconds is a floor, not a target, and the curve flattens past about seven:
+    aim for ten and there is little left to gain. Make sure most of it is speech rather
+    than silence -- a recording that is half pauses carries half the evidence its length
+    suggests -- which is why the reference service applies a voice-activity check.
     """
 
     def __init__(
