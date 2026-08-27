@@ -105,21 +105,36 @@ evidence its duration suggests. The reference service runs
 [silero VAD](https://github.com/snakers4/silero-vad) and rejects anything below 80% speech
 before transcribing.
 
+## What is in this repository
+
+| path | what it is | size |
+|---|---|---|
+| `300m/` | the language-ID head — the model this card describes | 8.2 MB |
+| `asr/` | the Omnilingual ASR recogniser that produces the transcripts it reads | 279 MB |
+
+The head classifies text and cannot read audio, so `asr/` is mirrored here to keep both in
+one place. That model is Meta's, not ours, released under Apache 2.0 — `asr/LICENSE` and
+`asr/ATTRIBUTION.md` travel with it.
+
 ## Usage
 
 ```python
+import soundfile as sf
 import sherpa_onnx
 from ghana_speech_id import GhanaSpeechId
 
-rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(
-    model="omniasr-300m/model.int8.onnx", tokens="omniasr-300m/tokens.txt")
-lid = GhanaSpeechId.load("ghananlpcommunity/ghana-speech-id")
+model, tokens = GhanaSpeechId.download_recogniser()   # asr/, 279 MB, once
+rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(model=model, tokens=tokens)
+lid = GhanaSpeechId.load()                            # 300m/, 8.2 MB
 
+wav, sr = sf.read("clip.wav", dtype="float32")
 s = rec.create_stream()
-s.accept_waveform(16000, wav)
+s.accept_waveform(sr, wav)
 rec.decode_stream(s)
 print(lid.classify(s.result.text))
 ```
+
+`load()` pulls only the head; the recogniser downloads when you ask for it and not before.
 
 On device there is no Python: sherpa-onnx produces the transcript and the head runs in
 onnxruntime through a C API, with Kotlin and Swift bindings. See
@@ -146,12 +161,6 @@ A linear classifier over character n-grams of the transcript, with tf-idf folded
 ONNX graph. Trained on 40-character windows (about 3.3 s) rather than whole transcripts,
 which is worth +1.1 points out of domain and +4.7 at one second of speech. Inference
 classifies the whole transcript in one pass.
-
-An earlier version used IPA phonemes from a recogniser fine-tuned on this corpus. Two
-measurements changed it: orthography beats IPA by five points at equal size, and the
-fine-tuned front end had lost the ability to read audio outside its training domain —
-1.13 characters per second with 35% of clips empty where the base model manages 8.36 and
-none. Rebuilding on the base model moved out-of-domain accuracy from 36.3% to 77.6%.
 
 ## Limitations
 
