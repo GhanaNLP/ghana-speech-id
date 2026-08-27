@@ -85,9 +85,11 @@ scores 74.2% against 72.1%.
 ## How much audio to give it
 
 **Five seconds minimum, ten for the best result.** This matters more than the choice of
-variant, the feature count, or anything else you can tune. Measured out of domain on real
-audio of each length — not on truncated transcripts, which flatter short input by about six
-points because the recogniser still had the whole clip:
+variant, the feature count, or anything else you can tune. Measured on
+[ghana-speech-eval](https://huggingface.co/datasets/ghananlpcommunity/ghana-speech-eval)
+without its `bible_*` configs — the out-of-domain set described under Evaluation below — on
+real audio of each length, not on truncated transcripts, which flatter short input by about
+six points because the recogniser still had the whole clip:
 
 | audio | accuracy | clips scored | mean characters | empty transcripts |
 |---|---|---|---|---|

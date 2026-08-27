@@ -213,10 +213,12 @@ streamed per click from
 [GRN African Speech](https://huggingface.co/datasets/AfriSpeech/grn-african-speech) rather
 than rehosted, because that audio is Global Recordings Network's and offered for research.
 
-On one random clip per language it gets **38 of 41**, missing Anyin as Sehwi, Bassar Ntcham
-as Konkomba and Nawuri as Gikyode — each a close relative of the right answer. Read that
-number as an upper bound, not as the headline: GRN is religious narration, the same genre
-as the training corpus, so it sits far nearer in-domain than the 78% figure above.
+GRN is a demo asset only — it appears in no evaluation, and no number in this README comes
+from it. As a check that the samples work, one random clip per language returns the right
+answer 38 times out of 41 (missing Anyin as Sehwi, Bassar Ntcham as Konkomba, Nawuri as
+Gikyode, each a close relative). That is a sanity check on one clip per language in a
+flattering domain — GRN is religious narration, the same genre as the training corpus — not
+a result. **77.6% on ghana-speech-eval is the number that describes this model.**
 
 ## Limitations
 
