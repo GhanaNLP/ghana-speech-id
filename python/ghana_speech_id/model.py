@@ -154,12 +154,14 @@ class GhanaSpeechId:
         if not path.is_dir():
             from huggingface_hub import snapshot_download
 
-            # Patterns are matched against the full relative path, so a bare "ngrams.txt"
-            # never matches "300m/ngrams.txt" and the model directory comes down empty.
+            # Patterns match the full relative path, so a bare "ngrams.txt" never matches
+            # "300m/ngrams.txt" and the directory comes down empty. Equally, "*.onnx" would
+            # match asr/model.int8.onnx and drag 279 MB of recogniser behind an 8 MB head,
+            # so this names the directory rather than globbing by extension.
             path = Path(
                 snapshot_download(
                     str(model),
-                    allow_patterns=["*.onnx", "*.txt", "config.json"],
+                    allow_patterns=[f"{MODEL_DIR}/*", "config.json"],
                 )
             )
 
@@ -182,6 +184,26 @@ class GhanaSpeechId:
         cfg = root / "head_config.txt"
         return cls(onnx, root / "ngrams.txt", root / "labels.txt",
                    cfg if cfg.exists() else None, num_threads)
+
+    @staticmethod
+    def download_recogniser(model: str = DEFAULT_REPO) -> tuple[str, str]:
+        """Fetch the omniASR recogniser this head reads, returning (model, tokens) paths.
+
+        The head classifies text and cannot read audio, so something has to produce the
+        transcript. That recogniser is 279 MB against this library's 8.2 MB, and it is only
+        downloaded when you ask for it::
+
+            model, tokens = GhanaSpeechId.download_recogniser()
+            rec = sherpa_onnx.OfflineRecognizer.from_omnilingual_asr_ctc(
+                model=model, tokens=tokens)
+
+        Omnilingual ASR is Meta's, Apache 2.0, mirrored into the same repo so there is one
+        place to fetch from; ``asr/LICENSE`` travels with it.
+        """
+        from huggingface_hub import hf_hub_download
+
+        return (hf_hub_download(model, "asr/model.int8.onnx"),
+                hf_hub_download(model, "asr/tokens.txt"))
 
     # ------------------------------------------------------------------ features
 
