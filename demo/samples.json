@@ -1,0 +1,248 @@
+[
+ {
+  "label": "Anyin_any",
+  "config": "any_anyin",
+  "grn_name": "Anyin",
+  "clips": 549
+ },
+ {
+  "label": "Avatime_avn",
+  "config": "avn_avatime",
+  "grn_name": "Avatime",
+  "clips": 114
+ },
+ {
+  "label": "Bassar_Ntcham_bud",
+  "config": "bud_ntcham",
+  "grn_name": "Ntcham",
+  "clips": 714
+ },
+ {
+  "label": "Bimoba_bim",
+  "config": "bim_bimoba",
+  "grn_name": "Bimoba",
+  "clips": 832
+ },
+ {
+  "label": "Birifor_Southern_biv",
+  "config": "biv_birifor_southern",
+  "grn_name": "Birifor, Southern",
+  "clips": 249
+ },
+ {
+  "label": "Bissa_bib",
+  "config": "bib_bisa",
+  "grn_name": "Bisa",
+  "clips": 705
+ },
+ {
+  "label": "Buli_bwu",
+  "config": "bwu_buli",
+  "grn_name": "Buli",
+  "clips": 1908
+ },
+ {
+  "label": "Chumburung_ncu",
+  "config": "ncu_chumuru",
+  "grn_name": "Chumuru",
+  "clips": 420
+ },
+ {
+  "label": "Dagaare_dga",
+  "config": "dga_dagari",
+  "grn_name": "Dagari",
+  "clips": 1108
+ },
+ {
+  "label": "Dagbani_dag",
+  "config": "dag_dagbani",
+  "grn_name": "Dagbani",
+  "clips": 1254
+ },
+ {
+  "label": "Dangme_ada",
+  "config": "ada_dangme",
+  "grn_name": "Dangme",
+  "clips": 809
+ },
+ {
+  "label": "Deg_mzw",
+  "config": "mzw_deg",
+  "grn_name": "Deg",
+  "clips": 420
+ },
+ {
+  "label": "Ewe_ewe",
+  "config": "ewe_ewe",
+  "grn_name": "Ewe",
+  "clips": 1655
+ },
+ {
+  "label": "Fante_fat",
+  "config": "fat_fante",
+  "grn_name": "Fante",
+  "clips": 640
+ },
+ {
+  "label": "Fulfulde_Maasina_ffm",
+  "config": "ffm_fulfulde_maasina",
+  "grn_name": "Fulfulde, Maasina",
+  "clips": 177
+ },
+ {
+  "label": "Gikyode_acd",
+  "config": "acd_achode",
+  "grn_name": "Achode",
+  "clips": 635
+ },
+ {
+  "label": "Gonja_gjn",
+  "config": "gjn_gonja",
+  "grn_name": "Gonja",
+  "clips": 1257
+ },
+ {
+  "label": "Hausa_hau",
+  "config": "hau_hausa",
+  "grn_name": "Hausa",
+  "clips": 2533
+ },
+ {
+  "label": "Kabiye_kbp",
+  "config": "kbp_kabye",
+  "grn_name": "Kabye",
+  "clips": 2748
+ },
+ {
+  "label": "Kasem_xsm",
+  "config": "xsm_kasem",
+  "grn_name": "Kasem",
+  "clips": 2218
+ },
+ {
+  "label": "Konkomba_xon",
+  "config": "xon_konkomba",
+  "grn_name": "Konkomba",
+  "clips": 810
+ },
+ {
+  "label": "Konni_kma",
+  "config": "kma_konni",
+  "grn_name": "Konni",
+  "clips": 899
+ },
+ {
+  "label": "Kusaal_kus",
+  "config": "kus_kusal",
+  "grn_name": "Kusal",
+  "clips": 893
+ },
+ {
+  "label": "Lelemi_lef",
+  "config": "lef_lelemi",
+  "grn_name": "Lelemi",
+  "clips": 807
+ },
+ {
+  "label": "Mampruli_maw",
+  "config": "maw_mampruli",
+  "grn_name": "Mampruli",
+  "clips": 776
+ },
+ {
+  "label": "Nawuri_naw",
+  "config": "naw_nawuri",
+  "grn_name": "Nawuri",
+  "clips": 354
+ },
+ {
+  "label": "Ninkare_gur",
+  "config": "gur_farefare",
+  "grn_name": "Farefare",
+  "clips": 2992
+ },
+ {
+  "label": "Nkonya_nko",
+  "config": "nko_nkonya",
+  "grn_name": "Nkonya",
+  "clips": 193
+ },
+ {
+  "label": "Ntrubo_ntr",
+  "config": "ntr_ntrubo",
+  "grn_name": "Ntrubo",
+  "clips": 540
+ },
+ {
+  "label": "Nzema_nzi",
+  "config": "nzi_nzema",
+  "grn_name": "Nzema",
+  "clips": 605
+ },
+ {
+  "label": "Paasaal_sig",
+  "config": "sig_paasaal",
+  "grn_name": "Paasaal",
+  "clips": 580
+ },
+ {
+  "label": "Sehwi_sfw",
+  "config": "sfw_sehwi",
+  "grn_name": "Sehwi",
+  "clips": 1209
+ },
+ {
+  "label": "Sekpele_lip",
+  "config": "lip_likpe",
+  "grn_name": "Likpe",
+  "clips": 53
+ },
+ {
+  "label": "Selee_snw",
+  "config": "snw_selee",
+  "grn_name": "Selee",
+  "clips": 79
+ },
+ {
+  "label": "Sisaala_Tumulung_sil",
+  "config": "sil_sisaala_tumulung",
+  "grn_name": "Sisaala, Tumulung",
+  "clips": 3324
+ },
+ {
+  "label": "Siwu_akp",
+  "config": "akp_akpafu_lolobi",
+  "grn_name": "Akpafu-Lolobi",
+  "clips": 100
+ },
+ {
+  "label": "Tampulma_tpm",
+  "config": "tpm_tampulma",
+  "grn_name": "Tampulma",
+  "clips": 721
+ },
+ {
+  "label": "Tem_kdh",
+  "config": "kdh_tem_central",
+  "grn_name": "Tem, Central",
+  "clips": 1428
+ },
+ {
+  "label": "Tuwuli_bov",
+  "config": "bov_bowiri",
+  "grn_name": "Bowiri",
+  "clips": 107
+ },
+ {
+  "label": "Twi_twi",
+  "config": "twi_twi",
+  "grn_name": "Twi",
+  "clips": 1517
+ },
+ {
+  "label": "Vagla_vag",
+  "config": "vag_vagla",
+  "grn_name": "Vagla",
+  "clips": 892
+ }
+]

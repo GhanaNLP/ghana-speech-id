@@ -51,6 +51,21 @@
         letter-spacing: .08em; }
   .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 
+  /* 41 chips is a lot of surface, so keep them small and let the row scroll rather
+     than pushing the recorder off the screen */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 148px; overflow-y: auto;
+           padding: 2px; }
+  .chips button {
+    padding: 6px 10px; font-size: .8rem; font-family: inherit; cursor: pointer;
+    color: var(--dim); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 99px; transition: border-color .15s, color .15s;
+  }
+  .chips button:hover { border-color: var(--accent); color: var(--text); }
+  .chips button[data-on="1"] { border-color: var(--accent); color: var(--text); }
+  .chips button:disabled { opacity: .5; cursor: default; }
+  .played { width: 100%; margin-top: 12px; height: 34px; }
+  .played[hidden] { display: none; }
+
   /* level meter doubles as the "is my mic working" signal and the too-quiet warning */
   .meter { height: 8px; background: var(--line); border-radius: 99px; margin: 16px 0 6px;
            overflow: hidden; }
@@ -98,6 +113,15 @@
       up to twenty seconds of actual speech — usually far more than someone records by
       hand, which is why this is the more accurate route.</div>
 
+    <div class="or">or try a sample</div>
+
+    <div class="chips" id="chips"></div>
+    <audio id="clip" class="played" controls hidden></audio>
+    <div class="hint" id="samphint">Pick a language and it fetches a real recording in it,
+      plays it, and identifies it — so you can check the answer against what you asked for.
+      These are religious narration, the same genre the model was trained on, so they are
+      kinder to it than everyday speech is.</div>
+
     <div class="or">or record</div>
 
     <button id="rec">Hold on — checking microphone…</button>
@@ -121,7 +145,10 @@
   <footer>
     <a href="https://github.com/GhanaNLP/ghana-speech-id">github</a> ·
     <a href="https://huggingface.co/ghananlpcommunity/ghana-speech-id">model</a> ·
-    41 languages, no English · runs on CPU · longer speech is more accurate
+    41 languages, no English · runs on CPU · longer speech is more accurate<br>
+    samples from <a href="https://huggingface.co/datasets/AfriSpeech/grn-african-speech">GRN
+    African Speech</a> — audio © <a href="https://globalrecordings.net">Global Recordings
+    Network</a>, used for research
   </footer>
 </div>
 
@@ -278,7 +305,7 @@ async function stop() {
   btn.disabled = false;
 }
 
-function show(d, sink) {
+function show(d, sink, expected) {
   const say = sink || setHint;
   if (!d || !d.ok) {
     const why = d && d.reason ? d.reason : "something went wrong";
@@ -318,12 +345,129 @@ function show(d, sink) {
     + '<span class="t"><i style="width:' + Math.round(t.score * 100) + '%"></i></span>'
     + '<span class="n">' + Math.round(t.score * 100) + '%</span></div>').join("");
   el("tx").innerHTML = "<b>Heard:</b> " + d.transcript;
+  if (expected && d.language !== expected) {
+    el("lang").textContent += " — asked for " + displayName(expected);
+  }
   el("note").textContent = d.short
     ? "Short sample. Accuracy climbs steeply with speech — a longer recording will be "
       + "noticeably more reliable."
     : "";
   el("out").style.display = "block";
 }
+
+// ------------------------------------------------------------------ sample clips
+// Streamed from the source dataset rather than copied here: the audio is GRN's, offered
+// for research, and a fresh signed URL per click means nothing of theirs is rehosted.
+const ROWS = "https://datasets-server.huggingface.co/rows";
+const GRN = "AfriSpeech/grn-african-speech";
+
+// label, display name, GRN subset, clips available to sample from
+const SAMPLES = [
+  ["Anyin_any","Anyin","any_anyin",200],
+  ["Avatime_avn","Avatime","avn_avatime",114],
+  ["Bassar_Ntcham_bud","Bassar Ntcham","bud_ntcham",200],
+  ["Bimoba_bim","Bimoba","bim_bimoba",200],
+  ["Birifor_Southern_biv","Birifor Southern","biv_birifor_southern",200],
+  ["Bissa_bib","Bissa","bib_bisa",200],
+  ["Buli_bwu","Buli","bwu_buli",200],
+  ["Chumburung_ncu","Chumburung","ncu_chumuru",200],
+  ["Dagaare_dga","Dagaare","dga_dagari",200],
+  ["Dagbani_dag","Dagbani","dag_dagbani",200],
+  ["Dangme_ada","Dangme","ada_dangme",200],
+  ["Deg_mzw","Deg","mzw_deg",200],
+  ["Ewe_ewe","Ewe","ewe_ewe",200],
+  ["Fante_fat","Fante","fat_fante",200],
+  ["Fulfulde_Maasina_ffm","Fulfulde Maasina","ffm_fulfulde_maasina",177],
+  ["Gikyode_acd","Gikyode","acd_achode",200],
+  ["Gonja_gjn","Gonja","gjn_gonja",200],
+  ["Hausa_hau","Hausa","hau_hausa",200],
+  ["Kabiye_kbp","Kabiye","kbp_kabye",200],
+  ["Kasem_xsm","Kasem","xsm_kasem",200],
+  ["Konkomba_xon","Konkomba","xon_konkomba",200],
+  ["Konni_kma","Konni","kma_konni",200],
+  ["Kusaal_kus","Kusaal","kus_kusal",200],
+  ["Lelemi_lef","Lelemi","lef_lelemi",200],
+  ["Mampruli_maw","Mampruli","maw_mampruli",200],
+  ["Nawuri_naw","Nawuri","naw_nawuri",200],
+  ["Ninkare_gur","Ninkare","gur_farefare",200],
+  ["Nkonya_nko","Nkonya","nko_nkonya",193],
+  ["Ntrubo_ntr","Ntrubo","ntr_ntrubo",200],
+  ["Nzema_nzi","Nzema","nzi_nzema",200],
+  ["Paasaal_sig","Paasaal","sig_paasaal",200],
+  ["Sehwi_sfw","Sehwi","sfw_sehwi",200],
+  ["Sekpele_lip","Sekpele","lip_likpe",53],
+  ["Selee_snw","Selee","snw_selee",79],
+  ["Sisaala_Tumulung_sil","Sisaala Tumulung","sil_sisaala_tumulung",200],
+  ["Siwu_akp","Siwu","akp_akpafu_lolobi",100],
+  ["Tampulma_tpm","Tampulma","tpm_tampulma",200],
+  ["Tem_kdh","Tem","kdh_tem_central",200],
+  ["Tuwuli_bov","Tuwuli","bov_bowiri",107],
+  ["Twi_twi","Twi","twi_twi",200],
+  ["Vagla_vag","Vagla","vag_vagla",200],
+];
+
+const chips = el("chips"), clipEl = el("clip");
+let sampleBusy = false;
+
+function setSampHint(text, cls = "") {
+  el("samphint").className = "hint " + cls;
+  el("samphint").textContent = text;
+}
+
+async function runSample(entry, chip) {
+  if (sampleBusy) return;
+  const [label, name, config, clips] = entry;
+  sampleBusy = true;
+  warm();
+  chips.querySelectorAll("button").forEach(b => { b.disabled = true; b.dataset.on = "0"; });
+  chip.dataset.on = "1";
+  el("out").style.display = "none";
+  setSampHint("Fetching a " + name + " recording…");
+  try {
+    // A different clip each time, so the demo is not one lucky recording per language.
+    const off = Math.floor(Math.random() * clips);
+    const meta = await fetch(ROWS + "?dataset=" + encodeURIComponent(GRN)
+      + "&config=" + encodeURIComponent(config) + "&split=train&offset=" + off + "&length=1");
+    if (meta.status === 429) throw new Error("busy");
+    const src = (await meta.json()).rows[0].row.audio[0].src;
+
+    const audio = await (await fetch(src)).blob();
+    clipEl.src = URL.createObjectURL(audio);
+    clipEl.hidden = false;
+    clipEl.play().catch(() => {});          // autoplay may be blocked; controls still work
+
+    setSampHint("Listening to the " + name + " clip…");
+    const resp = await fetch(IDENTIFY_FILE, {
+      method: "POST", mode: "cors",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: audio,
+    });
+    const d = await resp.json();
+    show(d, setSampHint, label);
+    if (d && d.ok) {
+      const right = d.language === label;
+      setSampHint(right
+        ? "Correct — that clip is " + name + "."
+        : "Asked for " + name + ", answered " + displayName(d.language)
+          + ". Closely related languages are where this model slips.",
+        right ? "" : "warn");
+    }
+  } catch (e) {
+    setSampHint(e.message === "busy"
+      ? "The dataset is rate limiting. Wait a moment and try again."
+      : "Could not fetch that sample. Try another language.", "warn");
+  }
+  chips.querySelectorAll("button").forEach(b => { b.disabled = false; });
+  sampleBusy = false;
+}
+
+SAMPLES.forEach(entry => {
+  const b = document.createElement("button");
+  b.textContent = entry[1];
+  b.onclick = () => runSample(entry, b);
+  chips.appendChild(b);
+});
+chips.addEventListener("mouseenter", warm, { once: true });
 
 // ------------------------------------------------------------------ file upload
 const drop = el("drop"), fileInput = el("file");

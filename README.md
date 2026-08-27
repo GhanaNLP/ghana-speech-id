@@ -195,6 +195,19 @@ language identity than pooled acoustic vectors, and the gap widens as audio gets
 Audio chunking — training on 3 s windows to match inference — was also measured and came out
 **neutral** once training-data volume was controlled for.
 
+## Demo
+
+[The Space](https://huggingface.co/spaces/ghananlpcommunity/ghana-speech-id) takes an
+uploaded file, a recording, or a one-click sample in any of the 41 languages. Samples are
+streamed per click from
+[GRN African Speech](https://huggingface.co/datasets/AfriSpeech/grn-african-speech) rather
+than rehosted, because that audio is Global Recordings Network's and offered for research.
+
+On one random clip per language it gets **38 of 41**, missing Anyin as Sehwi, Bassar Ntcham
+as Konkomba and Nawuri as Gikyode — each a close relative of the right answer. Read that
+number as an upper bound, not as the headline: GRN is religious narration, the same genre
+as the training corpus, so it sits far nearer in-domain than the 78% figure above.
+
 ## Limitations
 
 **Closed set.** The head always names one of its 41 classes. Ga, Ahanta and Ikposo are not
